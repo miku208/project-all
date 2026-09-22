@@ -1,0 +1,12 @@
+{
+  "name": "Ashi X Miku",
+  "short_name": "Ashi X Miku",
+  "description": "Player musik tanpa login — playlist, favorit, dan pencarian.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0a0c0f",
+  "theme_color": "#0a0c0f",
+  "icons": [
+    { "src": "./assets/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

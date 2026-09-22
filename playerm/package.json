@@ -1,0 +1,16 @@
+{
+  "name": "kaset-music-player",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Kaset — pemutar musik standalone (playlist, favorit, search, no login)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

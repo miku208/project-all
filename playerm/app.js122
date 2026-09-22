@@ -1,0 +1,799 @@
+'use strict';
+
+/* =========================================================
+   Miku Music — app.js
+   Architecture note (see section 18 of the brief):
+   The search API only returns METADATA + a Spotify link — never
+   a playable audio file. This app keeps three things separate:
+     1) metadata   -> comes straight from the search API
+     2) artwork    -> song.thumbnail
+     3) audio source -> resolved by resolveAudioSource(song)
+   resolveAudioSource() is the single place to plug in a licensed
+   audio-source endpoint later. Until one is configured it returns
+   null and the player shows a friendly "preview unavailable"
+   state instead of crashing or treating the Spotify URL as audio.
+   ========================================================= */
+
+const SEARCH_API = 'https://api.nexray.eu.cc/search/spotify?q=';
+const DEBOUNCE_MS = 400;
+const DEFAULT_ARTWORK = './assets/favicon.svg';
+
+/* ---------------------------------------------------------
+   Pluggable audio source resolver.
+   Replace the body of this function with a call to a licensed
+   audio-source API when one is available. It must resolve to
+   either a playable audio URL (string) or null.
+--------------------------------------------------------- */
+async function resolveAudioSource(song) {
+  if (song && typeof song.audioUrl === 'string' && song.audioUrl) return song.audioUrl;
+  return null;
+}
+
+/* ---------------------------------------------------------
+   Tiny state store + localStorage helpers
+--------------------------------------------------------- */
+const Store = {
+  get(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw === null ? fallback : JSON.parse(raw);
+    } catch (_) { return fallback; }
+  },
+  set(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* storage full/unavailable: ignore */ }
+  }
+};
+
+const state = {
+  queue: Store.get('mm_queue', []),
+  queueIndex: Store.get('mm_queue_index', -1),
+  recent: Store.get('mm_recent', []),
+  favorites: Store.get('mm_favorites', []),
+  shuffle: Store.get('mm_shuffle', false),
+  repeat: Store.get('mm_repeat', 'off'), // off | all | one
+  volume: Store.get('mm_volume', 80),
+  activeTab: 'search',
+  lastSearchResults: [],
+  searchAbortToken: 0,
+  audioReady: false
+};
+
+/* ---------------------------------------------------------
+   DOM refs
+--------------------------------------------------------- */
+const $ = (sel) => document.querySelector(sel);
+const els = {
+  searchInput: $('#searchInput'),
+  clearSearch: $('#clearSearch'),
+  searchStatus: $('#searchStatus'),
+  searchResults: $('#searchResults'),
+  recentResults: $('#recentResults'),
+  favoriteResults: $('#favoriteResults'),
+  queueList: $('#queueList'),
+  shuffleQueueBtn: $('#shuffleQueueBtn'),
+
+  menuBtn: $('#menuBtn'),
+  sideMenu: $('#sideMenu'),
+  scrim: $('#scrim'),
+  tabs: document.querySelectorAll('.tab'),
+  panels: document.querySelectorAll('.panel'),
+
+  bgLayerA: $('.layer-a'),
+  bgLayerB: $('.layer-b'),
+
+  miniPlayer: $('#miniPlayer'),
+  miniCover: $('#miniCover'),
+  miniTitle: $('#miniTitle'),
+  miniArtist: $('#miniArtist'),
+  miniProgressFill: $('#miniProgressFill'),
+  miniPlayPause: $('#miniPlayPause'),
+  miniPrev: $('#miniPrev'),
+  miniNext: $('#miniNext'),
+
+  player: $('#player'),
+  closePlayer: $('#closePlayer'),
+  favBtn: $('#favBtn'),
+  cover: $('#cover'),
+  trackTitle: $('#trackTitle'),
+  trackArtist: $('#trackArtist'),
+  seekBar: $('#seekBar'),
+  currentTime: $('#currentTime'),
+  duration: $('#duration'),
+  playerError: $('#playerError'),
+  shuffleBtn: $('#shuffleBtn'),
+  prevBtn: $('#prevBtn'),
+  playPauseBtn: $('#playPauseBtn'),
+  nextBtn: $('#nextBtn'),
+  repeatBtn: $('#repeatBtn'),
+  volumeBar: $('#volumeBar'),
+  audio: $('#audio')
+};
+
+/* ---------------------------------------------------------
+   Utilities
+--------------------------------------------------------- */
+function escapeHTML(str) {
+  return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function formatTime(sec) {
+  if (!isFinite(sec) || sec < 0) return '0:00';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+function durationToSeconds(d) {
+  if (typeof d === 'number') return d;
+  if (typeof d !== 'string') return 0;
+  const parts = d.split(':').map(Number);
+  if (parts.some(isNaN)) return 0;
+  return parts.reduce((acc, v) => acc * 60 + v, 0);
+}
+
+function songKey(song) {
+  return song.url || `${song.title}__${song.artist}`;
+}
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+/* ---------------------------------------------------------
+   Dominant color extraction from artwork (drives --accent)
+   Falls back silently to the default token on any failure
+   (CORS-blocked image, load error, etc.) — never throws.
+--------------------------------------------------------- */
+const colorCache = new Map();
+
+async function extractAccentColor(imgUrl) {
+  if (!imgUrl) return null;
+  if (colorCache.has(imgUrl)) return colorCache.get(imgUrl);
+
+  const color = await new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    const timeout = setTimeout(() => resolve(null), 3000);
+    img.onload = () => {
+      clearTimeout(timeout);
+      try {
+        const size = 24;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, size, size);
+        const data = ctx.getImageData(0, 0, size, size).data;
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const alpha = data[i + 3];
+          if (alpha < 100) continue;
+          const rr = data[i], gg = data[i + 1], bb = data[i + 2];
+          const max = Math.max(rr, gg, bb), min = Math.min(rr, gg, bb);
+          const sat = max === 0 ? 0 : (max - min) / max;
+          const lum = (rr + gg + bb) / 3;
+          if (lum < 22 || lum > 235) continue; // skip near-black/near-white
+          const weight = 0.4 + sat; // favor saturated pixels
+          r += rr * weight; g += gg * weight; b += bb * weight; n += weight;
+        }
+        if (n === 0) { resolve(null); return; }
+        r = Math.round(r / n); g = Math.round(g / n); b = Math.round(b / n);
+        // boost saturation/lightness a touch so it reads well as an accent
+        resolve(boostColor(r, g, b));
+      } catch (_) {
+        resolve(null); // canvas tainted by CORS or other failure
+      }
+    };
+    img.onerror = () => { clearTimeout(timeout); resolve(null); };
+    img.src = imgUrl;
+  });
+
+  colorCache.set(imgUrl, color);
+  return color;
+}
+
+function boostColor(r, g, b) {
+  const [h, s, l] = rgbToHsl(r, g, b);
+  const s2 = Math.min(1, s * 1.25 + 0.15);
+  const l2 = Math.min(0.72, Math.max(0.42, l));
+  const [r2, g2, b2] = hslToRgb(h, s2, l2);
+  return `rgb(${r2}, ${g2}, ${b2})`;
+}
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s; const l = (max + min) / 2;
+  if (max === min) { h = s = 0; }
+  else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      default: h = (r - g) / d + 4;
+    }
+    h /= 6;
+  }
+  return [h, s, l];
+}
+function hslToRgb(h, s, l) {
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1 / 3); g = hue2rgb(p, q, h); b = hue2rgb(p, q, h - 1 / 3);
+  }
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+function setAccentColor(rgbString) {
+  const root = document.documentElement;
+  if (!rgbString) {
+    root.style.setProperty('--accent', '#e8b25a');
+    root.style.setProperty('--accent-soft', '#e8b25a55');
+    root.style.setProperty('--accent-ink', '#1a1508');
+    return;
+  }
+  const m = rgbString.match(/\d+/g).map(Number);
+  const [r, g, b] = m;
+  root.style.setProperty('--accent', rgbString);
+  root.style.setProperty('--accent-soft', `rgba(${r},${g},${b},0.33)`);
+  const lum = (r * 299 + g * 587 + b * 114) / 1000;
+  root.style.setProperty('--accent-ink', lum > 150 ? '#161616' : '#f7f7f7');
+}
+
+/* ---------------------------------------------------------
+   Crossfading background
+--------------------------------------------------------- */
+let bgActiveIsA = true;
+function setBackground(imgUrl) {
+  const incoming = bgActiveIsA ? els.bgLayerB : els.bgLayerA;
+  const outgoing = bgActiveIsA ? els.bgLayerA : els.bgLayerB;
+  const url = imgUrl || DEFAULT_ARTWORK;
+  incoming.style.backgroundImage = `url("${url}")`;
+  requestAnimationFrame(() => {
+    incoming.classList.add('active');
+    outgoing.classList.remove('active');
+  });
+  bgActiveIsA = !bgActiveIsA;
+}
+
+/* ---------------------------------------------------------
+   Rendering: song cards
+--------------------------------------------------------- */
+function renderSongCard(song, { showPopularity = true } = {}) {
+  const key = songKey(song);
+  const isPlaying = state.queue[state.queueIndex] && songKey(state.queue[state.queueIndex]) === key;
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'song-card' + (isPlaying ? ' playing' : '');
+  card.innerHTML = `
+    <div class="thumb-wrap">
+      <img loading="lazy" src="${escapeHTML(song.thumbnail || DEFAULT_ARTWORK)}" alt="" />
+      <div class="playing-badge"><span class="eq-bar"></span><span class="eq-bar"></span><span class="eq-bar"></span></div>
+    </div>
+    <div class="song-info">
+      <div class="song-title">${escapeHTML(song.title || 'Tanpa judul')}</div>
+      <div class="song-sub">${escapeHTML(song.artist || 'Tidak diketahui')}${song.album ? ' · ' + escapeHTML(song.album) : ''}</div>
+    </div>
+    <div class="song-meta-right">
+      ${showPopularity && song.popularity != null ? `<span class="pop-pill">🔥 ${escapeHTML(song.popularity)}</span>` : ''}
+      <span>${escapeHTML(song.duration || '')}</span>
+    </div>
+  `;
+  card.querySelector('img').addEventListener('error', (e) => { e.target.src = DEFAULT_ARTWORK; });
+  card.addEventListener('click', () => playFromList(song, els.lastListForKey?.(key) || getListContaining(key) || [song]));
+  return card;
+}
+
+function getListContaining(key) {
+  if (state.lastSearchResults.some(s => songKey(s) === key)) return state.lastSearchResults;
+  if (state.recent.some(s => songKey(s) === key)) return state.recent;
+  if (state.favorites.some(s => songKey(s) === key)) return state.favorites;
+  return null;
+}
+
+function renderList(container, songs, emptyMessage) {
+  container.innerHTML = '';
+  if (!songs || songs.length === 0) {
+    container.innerHTML = `<div class="empty-state"><span class="emoji">♪</span><strong>Belum ada apa-apa di sini</strong>${escapeHTML(emptyMessage || '')}</div>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  songs.forEach((song) => frag.appendChild(renderSongCard(song)));
+  container.appendChild(frag);
+}
+
+function refreshPlayingHighlight() {
+  document.querySelectorAll('.song-card').forEach(card => card.classList.remove('playing'));
+  renderRecent();
+  renderFavorites();
+  if (state.lastSearchResults.length) renderList(els.searchResults, state.lastSearchResults);
+  renderQueue();
+}
+
+/* ---------------------------------------------------------
+   Search
+--------------------------------------------------------- */
+function setSearchStatus(mode, text) {
+  els.searchStatus.hidden = false;
+  els.searchStatus.className = 'status-line' + (mode === 'error' ? ' error' : '');
+  if (mode === 'loading') {
+    els.searchStatus.innerHTML = `<span class="spinner"></span> ${escapeHTML(text || 'Mencari...')}`;
+  } else {
+    els.searchStatus.textContent = text;
+  }
+}
+function clearSearchStatus() { els.searchStatus.hidden = true; els.searchStatus.textContent = ''; }
+
+async function performSearch(query) {
+  const token = ++state.searchAbortToken;
+  if (!query.trim()) {
+    clearSearchStatus();
+    state.lastSearchResults = [];
+    els.searchResults.innerHTML = '';
+    return;
+  }
+  setSearchStatus('loading', `Mencari “${query}”...`);
+  els.searchResults.innerHTML = '';
+
+  try {
+    const res = await fetch(SEARCH_API + encodeURIComponent(query));
+    if (token !== state.searchAbortToken) return; // stale response
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (token !== state.searchAbortToken) return;
+
+    if (!data || data.status === false || !Array.isArray(data.result)) {
+      throw new Error('Format respons tidak sesuai');
+    }
+    if (data.result.length === 0) {
+      state.lastSearchResults = [];
+      clearSearchStatus();
+      els.searchResults.innerHTML = `<div class="empty-state"><span class="emoji">🔍</span><strong>Tidak ditemukan</strong>Coba kata kunci lain.</div>`;
+      return;
+    }
+    state.lastSearchResults = data.result;
+    clearSearchStatus();
+    renderList(els.searchResults, data.result);
+  } catch (err) {
+    if (token !== state.searchAbortToken) return;
+    setSearchStatus('error', 'Gagal memuat hasil pencarian. Periksa koneksi lalu coba lagi.');
+    els.searchResults.innerHTML = '';
+  }
+}
+const debouncedSearch = debounce(performSearch, DEBOUNCE_MS);
+
+els.searchInput.addEventListener('input', (e) => {
+  const v = e.target.value;
+  els.clearSearch.hidden = v.length === 0;
+  debouncedSearch(v);
+});
+els.clearSearch.addEventListener('click', () => {
+  els.searchInput.value = '';
+  els.clearSearch.hidden = true;
+  state.searchAbortToken++;
+  clearSearchStatus();
+  state.lastSearchResults = [];
+  els.searchResults.innerHTML = '';
+  els.searchInput.focus();
+});
+
+/* ---------------------------------------------------------
+   Tabs / drawer navigation
+--------------------------------------------------------- */
+function openMenu() {
+  els.sideMenu.classList.add('open');
+  els.scrim.classList.add('show');
+  els.menuBtn.setAttribute('aria-expanded', 'true');
+}
+function closeMenu() {
+  els.sideMenu.classList.remove('open');
+  els.scrim.classList.remove('show');
+  els.menuBtn.setAttribute('aria-expanded', 'false');
+}
+els.menuBtn.addEventListener('click', () => {
+  els.sideMenu.classList.contains('open') ? closeMenu() : openMenu();
+});
+els.scrim.addEventListener('click', closeMenu);
+
+els.tabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    els.tabs.forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    state.activeTab = tab.dataset.tab;
+    els.panels.forEach(p => { p.hidden = p.dataset.panel !== state.activeTab; });
+    closeMenu();
+    if (state.activeTab === 'recent') renderRecent();
+    if (state.activeTab === 'favorites') renderFavorites();
+    if (state.activeTab === 'queue') renderQueue();
+  });
+});
+
+/* ---------------------------------------------------------
+   Recent / Favorites
+--------------------------------------------------------- */
+function pushRecent(song) {
+  const key = songKey(song);
+  state.recent = [song, ...state.recent.filter(s => songKey(s) !== key)].slice(0, 30);
+  Store.set('mm_recent', state.recent);
+}
+function renderRecent() { renderList(els.recentResults, state.recent, 'Lagu yang kamu putar akan muncul di sini.'); }
+
+function isFavorite(song) { return state.favorites.some(s => songKey(s) === songKey(song)); }
+function toggleFavorite(song) {
+  const key = songKey(song);
+  if (isFavorite(song)) {
+    state.favorites = state.favorites.filter(s => songKey(s) !== key);
+  } else {
+    state.favorites = [song, ...state.favorites];
+  }
+  Store.set('mm_favorites', state.favorites);
+  updateFavButton(song);
+  renderFavorites();
+}
+function updateFavButton(song) {
+  const active = song ? isFavorite(song) : false;
+  els.favBtn.setAttribute('aria-pressed', String(active));
+}
+function renderFavorites() { renderList(els.favoriteResults, state.favorites, 'Ketuk ikon hati saat memutar lagu untuk menyimpannya.'); }
+
+/* ---------------------------------------------------------
+   Queue
+--------------------------------------------------------- */
+function playFromList(song, list) {
+  state.queue = list.slice();
+  state.queueIndex = state.queue.findIndex(s => songKey(s) === songKey(song));
+  if (state.queueIndex === -1) { state.queue.unshift(song); state.queueIndex = 0; }
+  persistQueue();
+  loadCurrentTrack(true);
+}
+
+function persistQueue() {
+  Store.set('mm_queue', state.queue);
+  Store.set('mm_queue_index', state.queueIndex);
+}
+
+function renderQueue() {
+  els.queueList.innerHTML = '';
+  if (!state.queue.length) {
+    els.queueList.innerHTML = `<div class="empty-state"><span class="emoji">≡</span><strong>Antrean kosong</strong>Pilih lagu untuk mulai membangun antrean.</div>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  state.queue.forEach((song, i) => {
+    const row = document.createElement('div');
+    row.className = 'queue-item' + (i === state.queueIndex ? ' playing' : '');
+    row.innerHTML = `
+      <span class="queue-index">${i + 1}</span>
+      <img loading="lazy" src="${escapeHTML(song.thumbnail || DEFAULT_ARTWORK)}" alt="" />
+      <div class="song-info">
+        <div class="song-title">${escapeHTML(song.title || 'Tanpa judul')}</div>
+        <div class="song-sub">${escapeHTML(song.artist || '')}</div>
+      </div>
+      <button class="queue-remove" aria-label="Hapus dari antrean">✕</button>
+    `;
+    row.querySelector('img').addEventListener('error', (e) => { e.target.src = DEFAULT_ARTWORK; });
+    row.querySelector('.song-info').addEventListener('click', () => { state.queueIndex = i; persistQueue(); loadCurrentTrack(true); });
+    row.querySelector('.queue-remove').addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeFromQueue(i);
+    });
+    frag.appendChild(row);
+  });
+  els.queueList.appendChild(frag);
+}
+
+function removeFromQueue(index) {
+  state.queue.splice(index, 1);
+  if (index < state.queueIndex) state.queueIndex--;
+  else if (index === state.queueIndex) {
+    if (state.queueIndex >= state.queue.length) state.queueIndex = state.queue.length - 1;
+    persistQueue();
+    if (state.queue.length) loadCurrentTrack(true); else stopAndReset();
+    renderQueue();
+    return;
+  }
+  persistQueue();
+  renderQueue();
+}
+
+function shuffleArrayInPlace(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+els.shuffleQueueBtn.addEventListener('click', () => {
+  const current = state.queue[state.queueIndex];
+  shuffleArrayInPlace(state.queue);
+  if (current) state.queueIndex = state.queue.findIndex(s => songKey(s) === songKey(current));
+  persistQueue();
+  renderQueue();
+});
+
+/* ---------------------------------------------------------
+   Player core
+--------------------------------------------------------- */
+let currentAudioUrl = null;
+
+function stopAndReset() {
+  els.audio.pause();
+  els.audio.removeAttribute('src');
+  els.player.hidden = true;
+  els.miniPlayer.hidden = true;
+}
+
+async function loadCurrentTrack(autoplay) {
+  const song = state.queue[state.queueIndex];
+  if (!song) return;
+
+  els.player.hidden = false;
+  els.miniPlayer.hidden = false;
+  showPlayerError(null);
+  setPlayLoadingState(true);
+
+  els.trackTitle.textContent = song.title || 'Tanpa judul';
+  els.trackArtist.textContent = song.artist || 'Tidak diketahui';
+  els.miniTitle.textContent = song.title || 'Tanpa judul';
+  els.miniArtist.textContent = song.artist || '';
+  const art = song.thumbnail || DEFAULT_ARTWORK;
+  els.cover.src = art;
+  els.miniCover.src = art;
+  els.cover.onerror = () => { els.cover.src = DEFAULT_ARTWORK; };
+  els.miniCover.onerror = () => { els.miniCover.src = DEFAULT_ARTWORK; };
+
+  updateFavButton(song);
+  pushRecent(song);
+  Store.set('mm_recent', state.recent);
+  refreshPlayingHighlight();
+  persistQueue();
+
+  setBackground(song.thumbnail);
+  extractAccentColor(song.thumbnail).then(setAccentColor);
+
+  updateMediaSessionMetadata(song);
+
+  const audioUrl = await resolveAudioSource(song);
+  currentAudioUrl = audioUrl;
+
+  if (!audioUrl) {
+    setPlayLoadingState(false);
+    showPlayerError('Sumber audio untuk lagu ini belum tersedia. Metadata & artwork tetap ditampilkan.');
+    setPlayingUI(false);
+    return;
+  }
+
+  els.audio.src = audioUrl;
+  els.audio.volume = state.volume / 100;
+  try {
+    if (autoplay) {
+      await els.audio.play();
+    }
+  } catch (err) {
+    showPlayerError('Audio tidak dapat diputar otomatis. Ketuk tombol putar.');
+  } finally {
+    setPlayLoadingState(false);
+  }
+}
+
+function showPlayerError(msg) {
+  if (!msg) { els.playerError.hidden = true; els.playerError.textContent = ''; return; }
+  els.playerError.hidden = false;
+  els.playerError.textContent = msg;
+}
+
+function setPlayLoadingState(loading) {
+  const p = els.playPauseBtn;
+  p.querySelector('.icon-play').hidden = loading;
+  p.querySelector('.icon-pause').hidden = true;
+  p.querySelector('.icon-spin').hidden = !loading;
+}
+
+function setPlayingUI(isPlaying) {
+  const p = els.playPauseBtn;
+  p.querySelector('.icon-spin').hidden = true;
+  p.querySelector('.icon-play').hidden = isPlaying;
+  p.querySelector('.icon-pause').hidden = !isPlaying;
+  els.miniPlayPause.innerHTML = isPlaying
+    ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'
+    : '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" class="icon-play"><path d="M8 5v14l11-7z"/></svg>';
+  els.cover.classList.toggle('playing', isPlaying);
+  if (state.queue[state.queueIndex]) updateMediaSessionPlaybackState(isPlaying);
+}
+
+function togglePlayPause() {
+  const song = state.queue[state.queueIndex];
+  if (!song) return;
+  if (!currentAudioUrl) { showPlayerError('Sumber audio untuk lagu ini belum tersedia.'); return; }
+  if (els.audio.paused) {
+    els.audio.play().catch(() => showPlayerError('Audio gagal diputar.'));
+  } else {
+    els.audio.pause();
+  }
+}
+
+function playNext(fromAuto) {
+  if (!state.queue.length) return;
+  if (state.repeat === 'one' && fromAuto) { loadCurrentTrack(true); return; }
+  if (state.shuffle) {
+    if (state.queue.length === 1) { loadCurrentTrack(true); return; }
+    let next;
+    do { next = Math.floor(Math.random() * state.queue.length); } while (next === state.queueIndex);
+    state.queueIndex = next;
+  } else {
+    if (state.queueIndex < state.queue.length - 1) {
+      state.queueIndex++;
+    } else if (state.repeat === 'all') {
+      state.queueIndex = 0;
+    } else {
+      persistQueue();
+      return; // end of queue, no repeat
+    }
+  }
+  persistQueue();
+  loadCurrentTrack(true);
+}
+
+function playPrev() {
+  if (!state.queue.length) return;
+  if (els.audio.currentTime > 3) { els.audio.currentTime = 0; return; }
+  if (state.queueIndex > 0) state.queueIndex--;
+  else if (state.repeat === 'all') state.queueIndex = state.queue.length - 1;
+  else { els.audio.currentTime = 0; return; }
+  persistQueue();
+  loadCurrentTrack(true);
+}
+
+/* Audio element events */
+els.audio.addEventListener('play', () => setPlayingUI(true));
+els.audio.addEventListener('pause', () => setPlayingUI(false));
+els.audio.addEventListener('waiting', () => setPlayLoadingState(true));
+els.audio.addEventListener('playing', () => setPlayLoadingState(false));
+els.audio.addEventListener('ended', () => playNext(true));
+els.audio.addEventListener('error', () => {
+  if (currentAudioUrl) showPlayerError('Audio gagal dimuat. Coba lagu lain.');
+  setPlayLoadingState(false);
+});
+els.audio.addEventListener('timeupdate', () => {
+  const { currentTime, duration } = els.audio;
+  if (!isFinite(duration) || duration === 0) return;
+  const pct = (currentTime / duration) * 1000;
+  els.seekBar.value = String(pct);
+  els.seekBar.style.background = `linear-gradient(to right, var(--accent) ${pct / 10}%, var(--accent) ${pct / 10}%, var(--panel-strong) ${pct / 10}%, var(--panel-strong) 100%)`;
+  els.currentTime.textContent = formatTime(currentTime);
+  els.duration.textContent = formatTime(duration);
+  els.miniProgressFill.style.width = (pct / 10) + '%';
+  updateMediaSessionPosition();
+});
+els.audio.addEventListener('loadedmetadata', () => {
+  els.duration.textContent = formatTime(els.audio.duration);
+});
+
+/* Seek */
+let isSeeking = false;
+els.seekBar.addEventListener('input', () => { isSeeking = true; });
+els.seekBar.addEventListener('change', () => {
+  if (isFinite(els.audio.duration)) {
+    els.audio.currentTime = (Number(els.seekBar.value) / 1000) * els.audio.duration;
+  }
+  isSeeking = false;
+});
+
+/* Volume */
+function applyVolume(v) {
+  state.volume = v;
+  els.audio.volume = v / 100;
+  Store.set('mm_volume', v);
+}
+els.volumeBar.value = String(state.volume);
+els.volumeBar.addEventListener('input', (e) => applyVolume(Number(e.target.value)));
+
+/* Buttons */
+els.playPauseBtn.addEventListener('click', togglePlayPause);
+els.miniPlayPause.addEventListener('click', togglePlayPause);
+els.nextBtn.addEventListener('click', () => playNext(false));
+els.miniNext.addEventListener('click', () => playNext(false));
+els.prevBtn.addEventListener('click', playPrev);
+els.miniPrev.addEventListener('click', playPrev);
+
+els.shuffleBtn.addEventListener('click', () => {
+  state.shuffle = !state.shuffle;
+  Store.set('mm_shuffle', state.shuffle);
+  els.shuffleBtn.setAttribute('aria-pressed', String(state.shuffle));
+});
+
+const REPEAT_CYCLE = ['off', 'all', 'one'];
+els.repeatBtn.addEventListener('click', () => {
+  const idx = REPEAT_CYCLE.indexOf(state.repeat);
+  state.repeat = REPEAT_CYCLE[(idx + 1) % REPEAT_CYCLE.length];
+  Store.set('mm_repeat', state.repeat);
+  updateRepeatUI();
+});
+function updateRepeatUI() {
+  els.repeatBtn.dataset.mode = state.repeat;
+  els.repeatBtn.setAttribute('aria-pressed', String(state.repeat !== 'off'));
+  els.repeatBtn.querySelector('.repeat-one-dot').hidden = state.repeat !== 'one';
+}
+
+els.favBtn.addEventListener('click', () => {
+  const song = state.queue[state.queueIndex];
+  if (song) toggleFavorite(song);
+});
+
+els.miniPlayer.addEventListener('click', () => { els.player.hidden = false; });
+els.closePlayer.addEventListener('click', () => { els.player.hidden = true; });
+
+/* ---------------------------------------------------------
+   Media Session API (lock screen / notification controls)
+--------------------------------------------------------- */
+function updateMediaSessionMetadata(song) {
+  if (!('mediaSession' in navigator)) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: song.title || 'Tanpa judul',
+      artist: song.artist || '',
+      album: song.album || '',
+      artwork: [
+        { src: song.thumbnail || DEFAULT_ARTWORK, sizes: '512x512', type: 'image/png' }
+      ]
+    });
+    navigator.mediaSession.setActionHandler('play', () => togglePlayPause());
+    navigator.mediaSession.setActionHandler('pause', () => togglePlayPause());
+    navigator.mediaSession.setActionHandler('previoustrack', () => playPrev());
+    navigator.mediaSession.setActionHandler('nexttrack', () => playNext(false));
+    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+      els.audio.currentTime = Math.max(0, els.audio.currentTime - (details.seekOffset || 10));
+    });
+    navigator.mediaSession.setActionHandler('seekforward', (details) => {
+      els.audio.currentTime = Math.min(els.audio.duration || 0, els.audio.currentTime + (details.seekOffset || 10));
+    });
+  } catch (_) { /* MediaMetadata unsupported: ignore gracefully */ }
+}
+function updateMediaSessionPlaybackState(isPlaying) {
+  if (!('mediaSession' in navigator)) return;
+  navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+}
+function updateMediaSessionPosition() {
+  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+  const { duration, currentTime, playbackRate } = els.audio;
+  if (!isFinite(duration) || duration <= 0) return;
+  try {
+    navigator.mediaSession.setPositionState({ duration, playbackRate: playbackRate || 1, position: Math.min(currentTime, duration) });
+  } catch (_) { /* ignore */ }
+}
+
+/* ---------------------------------------------------------
+   Init
+--------------------------------------------------------- */
+function init() {
+  els.shuffleBtn.setAttribute('aria-pressed', String(state.shuffle));
+  updateRepeatUI();
+  renderRecent();
+  renderFavorites();
+  renderQueue();
+
+  if (state.queue.length && state.queueIndex >= 0 && state.queue[state.queueIndex]) {
+    loadCurrentTrack(false);
+  }
+
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    // Registration is best-effort; ignore failures (e.g. no sw.js hosted, unsupported scope).
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
+}
+
+init();

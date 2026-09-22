@@ -1,0 +1,85 @@
+'use strict';
+/**
+ * Miku Music — static server
+ * Serves the music-player folder as-is. Pure Node core modules only,
+ * so no `npm install` is needed on the VPS.
+ *
+ * Run directly:   node server.js
+ * Run with pm2:   pm2 start server.js --name miku-music
+ * Port:           set with PORT env var (default 8080)
+ */
+
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+const PORT = process.env.PORT || 8080;
+const ROOT = __dirname; // serve this folder (index.html, style.css, app.js, assets/...)
+
+const MIME_TYPES = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json'
+};
+
+function safeJoin(root, urlPath) {
+  // Strip query string, decode, and normalize to prevent path traversal (../..)
+  const decoded = decodeURIComponent(urlPath.split('?')[0]);
+  const resolved = path.normalize(path.join(root, decoded));
+  if (!resolved.startsWith(root)) return null; // blocked traversal attempt
+  return resolved;
+}
+
+const server = http.createServer((req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { 'Content-Type': 'text/plain' });
+    res.end('Method Not Allowed');
+    return;
+  }
+
+  let filePath = safeJoin(ROOT, req.url === '/' ? '/index.html' : req.url);
+  if (!filePath) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('Bad Request');
+    return;
+  }
+
+  fs.stat(filePath, (err, stats) => {
+    if (err) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('404 — Halaman tidak ditemukan');
+      return;
+    }
+    if (stats.isDirectory()) {
+      filePath = path.join(filePath, 'index.html');
+    }
+
+    fs.readFile(filePath, (readErr, content) => {
+      if (readErr) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('404 — Halaman tidak ditemukan');
+        return;
+      }
+      const ext = path.extname(filePath).toLowerCase();
+      const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        // sw.js must never be cached by the browser, or PWA updates won't be picked up
+        'Cache-Control': ext === '.html' || filePath.endsWith('sw.js') ? 'no-cache' : 'public, max-age=3600'
+      });
+      res.end(content);
+    });
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`Miku Music berjalan di http://localhost:${PORT}`);
+});
