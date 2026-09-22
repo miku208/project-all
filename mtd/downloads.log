@@ -1,0 +1,57 @@
+{"timestamp":"2026-07-28T17:26:25.919Z","url":"https://vt.tiktok.com/ZS4RB5MyA/","provider":"Nexray","status":"failed","responseTime":22,"error":"getaddrinfo ENOTFOUND api.nexray.io","ip":"127.0.0.1"}
+{"timestamp":"2026-07-28T17:26:27.205Z","url":"https://vt.tiktok.com/ZS4RB5MyA/","provider":"TikWM","status":"success","responseTime":1307,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-28T17:58:29.201Z","url":"https://vt.tiktok.com/ZS4RDk5oV/","provider":"Nexray","status":"success","responseTime":2227,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-28T18:00:10.866Z","url":"https://vt.tiktok.com/ZS4RDuSua/","provider":"Nexray","status":"success","responseTime":3447,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-28T18:02:41.209Z","url":"https://vt.tiktok.com/ZS4RD7YaX/","provider":"Nexray","status":"success","responseTime":2227,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:27:45.286Z","url":"https://vt.tiktok.com/ZS4RKRWMX/","provider":"Nexray","status":"success","responseTime":3447,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:29:25.344Z","url":"https://vt.tiktok.com/ZS4RKjCxo/","provider":"Nexray","status":"success","responseTime":1930,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:37:08.326Z","url":"https://vt.tiktok.com/ZS4RKjCxo/","provider":"Nexray","status":"success","responseTime":3319,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:38:01.478Z","url":"https://vt.tiktok.com/ZS4REUATQ/","provider":"Nexray","status":"success","responseTime":2135,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:38:09.688Z","url":"https://vt.tiktok.com/ZS4REUATQ/","provider":"Nexray","status":"success","responseTime":273,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:38:15.707Z","url":"https://vt.tiktok.com/ZS4REUATQ/","provider":"Nexray","status":"success","responseTime":262,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:38:18.726Z","url":"https://vt.tiktok.com/ZS4REUATQ/","provider":"Nexray","status":"success","responseTime":242,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:43:34.200Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":2742,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:43:40.472Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":523,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:53:17.765Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":4246,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:53:22.634Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":251,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:53:27.265Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":247,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:55:50.630Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":1225,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:56:21.684Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":928,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:56:49.036Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":267,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T00:57:16.551Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":504,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:02:45.545Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":2074,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:02:51.154Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":257,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:05:17.093Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":1943,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:06:01.571Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":1261,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:06:44.549Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":273,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:14:09.194Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":3449,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:16:50.787Z","url":"https://vt.tiktok.com/ZS48eqBmK/","provider":"Nexray","status":"success","responseTime":2369,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:29:15.615Z","url":"https://vt.tiktok.com/ZS48RQH4T/","provider":"Nexray","status":"success","responseTime":3775,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:30:13.669Z","url":"https://vt.tiktok.com/ZS4REt4wM/","provider":"Nexray","status":"success","responseTime":1703,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:36:20.288Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"Nexray","status":"partial","responseTime":5165,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:36:21.186Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"TikWM","status":"success","responseTime":6063,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:37:30.824Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"Nexray","status":"partial","responseTime":263,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:37:31.566Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"TikWM","status":"success","responseTime":1005,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:47:17.484Z","url":"https://vt.tiktok.com/ZS48N5Ssd/","provider":"Nexray","status":"partial","responseTime":3047,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:47:18.439Z","url":"https://vt.tiktok.com/ZS48N5Ssd/","provider":"TikWM","status":"success","responseTime":4002,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:53:03.578Z","url":"https://vt.tiktok.com/ZS48NtaYc/","provider":"Nexray","status":"partial","responseTime":3282,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:53:04.511Z","url":"https://vt.tiktok.com/ZS48NtaYc/","provider":"TikWM","status":"success","responseTime":4215,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:54:42.397Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"Nexray","status":"partial","responseTime":2337,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:54:45.197Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"TikWM","status":"success","responseTime":5137,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:55:47.761Z","url":"https://vt.tiktok.com/ZS48NtaYc/","provider":"Nexray","status":"partial","responseTime":944,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T01:55:49.116Z","url":"https://vt.tiktok.com/ZS48NtaYc/","provider":"TikWM","status":"success","responseTime":2299,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T03:14:47.469Z","url":"https://vt.tiktok.com/ZS48DEp8a/","provider":"Nexray","status":"success","responseTime":3617,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T03:54:59.124Z","url":"https://vt.tiktok.com/ZS48mDNen/","provider":"Nexray","status":"partial","responseTime":2481,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T03:55:00.260Z","url":"https://vt.tiktok.com/ZS48mDNen/","provider":"TikWM","status":"success","responseTime":3617,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T04:47:01.603Z","url":"https://vt.tiktok.com/ZS48mDNen/","provider":"Nexray","status":"partial","responseTime":2886,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T04:47:02.505Z","url":"https://vt.tiktok.com/ZS48mDNen/","provider":"TikWM","status":"success","responseTime":3788,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T05:28:07.624Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"Nexray","status":"partial","responseTime":2539,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T05:28:08.925Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"TikWM","status":"success","responseTime":3840,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T06:03:27.285Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"Nexray","status":"partial","responseTime":3367,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T06:03:28.068Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"TikWM","status":"success","responseTime":4150,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T06:16:13.501Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"Nexray","status":"partial","responseTime":2899,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T06:16:14.196Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"TikWM","status":"success","responseTime":3594,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T06:54:16.485Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"Nexray","status":"partial","responseTime":2282,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T06:54:17.062Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"TikWM","status":"success","responseTime":2859,"error":null,"ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T20:06:09.658Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"Nexray","status":"partial","responseTime":3159,"error":"video URL kosong","ip":"127.0.0.1"}
+{"timestamp":"2026-07-29T20:06:10.411Z","url":"https://vt.tiktok.com/ZS488spKm/","provider":"TikWM","status":"success","responseTime":3912,"error":null,"ip":"127.0.0.1"}
