@@ -1,0 +1,900 @@
+// plugins/otpku/index.js
+import { getDatabase } from "../../src/lib/ourin-database.js";
+
+/* ==================== KONFIGURASI ==================== */
+const BASE_URL = "https://my.otpku.co.id/api/";
+const API_KEY  = "dee9b42bd4abed35858b085da49c6b30607a7296704bfa5653f5ee5585c4965e";
+const DEFAULT_SERVICE = "wa";
+
+const COUNTRY_MAP = {
+  4:  { code: "PH", name: "Philippines", emoji: "🇵🇭", id: 4 },
+  6:  { code: "ID", name: "Indonesia", emoji: "🇮🇩", id: 6 },
+};
+
+const SERVICE_MAP = {
+  wa:        { emoji: "💬", label: "WhatsApp" },
+  telegram:  { emoji: "✈️", label: "Telegram" },
+  line:      { emoji: "💚", label: "LINE" },
+  instagram: { emoji: "📸", label: "Instagram" },
+  tiktok:    { emoji: "🎵", label: "TikTok" },
+  google:    { emoji: "🔴", label: "Google" },
+  facebook:  { emoji: "👍", label: "Facebook" },
+  twitter:   { emoji: "🐦", label: "Twitter/X" },
+  shopee:    { emoji: "🛍️", label: "Shopee" },
+  tokopedia: { emoji: "🛒", label: "Tokopedia" },
+  gojek:     { emoji: "🟢", label: "Gojek" },
+  grab:      { emoji: "🟡", label: "Grab" },
+  dana:      { emoji: "💙", label: "DANA" },
+  ovo:       { emoji: "💜", label: "OVO" },
+  gopay:     { emoji: "🟢", label: "GoPay" },
+  linkaja:   { emoji: "🔗", label: "LinkAja" },
+};
+
+/* ==================== PLUGIN CONFIG ==================== */
+const TOPUP_AMOUNTS = [];
+for (let i = 10; i <= 300; i += 10) TOPUP_AMOUNTS.push(i * 1000);
+
+const TOPUP_ALIASES = TOPUP_AMOUNTS.map(a => `otpku_topup_${a}`);
+
+const pluginConfig = {
+  name: "otpku",
+  alias: [
+    "otp", "nokos",
+    "otpku_beli", "otpku_beli_ph", "otpku_beli_id",
+    "otpku_saldo", "otpku_status",
+    "otpku_batal", "otpku_batal_last",
+    "otpku_harga", 
+    "otpku_topup", "otpku_cekdeposit",
+    ...TOPUP_ALIASES
+  ],
+  category: "tools",
+  description: "Beli nomor virtual untuk OTP via OTPKU",
+  usage: ".otpku [beli|saldo|status|batal|harga|topup|cekdeposit]",
+  example: ".otpku beli",
+  isOwner: false,
+  isPremium: false,
+  isGroup: false,
+  isPrivate: false,
+  cooldown: 5,
+  energi: 0,
+  isEnabled: true,
+};
+
+/* ==================== API WRAPPER ==================== */
+class OTPKUApi {
+  constructor(apiKey = API_KEY, baseUrl = BASE_URL) {
+    this.apiKey = apiKey;
+    this.baseUrl = baseUrl;
+  }
+
+  async _request(params) {
+    const body = new URLSearchParams({ api_key: this.apiKey, ...params });
+    try {
+      const res = await fetch(this.baseUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "Accept": "application/json",
+        },
+        body: body.toString(),
+      });
+
+      const text = await res.text();
+      console.log("[OTPKU API] Raw:", text.slice(0, 500));
+
+      try {
+        return JSON.parse(text);
+      } catch {
+        if (text.includes("Just a moment") || text.includes("Cloudflare")) {
+          return { success: false, error: "Cloudflare protection aktif", isCloudflare: true };
+        }
+        return { success: false, error: "Invalid API response", raw: text.slice(0, 300) };
+      }
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  getBalance()            { return this._request({ action: "getBalance" }); }
+  getPrices(country)      { return this._request({ action: "getPrices", country }); }
+  getNumber(service, country) {
+    return this._request({ action: "getNumber", service, country });
+  }
+  getStatus(orderId)      { return this._request({ action: "getStatus", id: orderId }); }
+  cancelActivation(orderId) { return this._request({ action: "cancelActivation", id: orderId }); }
+  createDeposit(amount)   { return this._request({ action: "createDeposit", amount }); }
+  checkDeposit(txId)      { return this._request({ action: "checkDeposit", transaction_id: txId }); }
+}
+
+/* ==================== ORDER MANAGER ==================== */
+class OrderManager {
+  constructor() { this.KEY = "otpku_orders"; }
+
+  _db() {
+    try { return getDatabase(); } catch { return null; }
+  }
+
+  _getAll() {
+    try { return this._db()?.setting(this.KEY) || {}; } catch { return {}; }
+  }
+
+  _save(data) {
+    try { this._db()?.setting(this.KEY, data); } catch {}
+  }
+
+  saveOrder(userId, data) {
+    const all = this._getAll();
+    if (!all[userId]) all[userId] = [];
+    all[userId].push({ ...data, createdAt: Date.now(), updatedAt: Date.now() });
+    this._save(all);
+    return all[userId];
+  }
+
+  getUserOrders(userId) {
+    return this._getAll()[userId] || [];
+  }
+
+  getActive(userId) {
+    const orders = this.getUserOrders(userId);
+    const active = orders.filter(o => o.status === "WAITING" || o.status === "PENDING");
+    return active.length ? active[active.length - 1] : null;
+  }
+
+  getAllActive(userId) {
+    return this.getUserOrders(userId).filter(o => o.status === "WAITING" || o.status === "PENDING");
+  }
+
+  getById(userId, orderId) {
+    return this.getUserOrders(userId).find(o => o.id === orderId) || null;
+  }
+
+  update(userId, orderId, patch) {
+    const all = this._getAll();
+    if (!all[userId]) return null;
+    const idx = all[userId].findIndex(o => o.id === orderId);
+    if (idx === -1) return null;
+    all[userId][idx] = { ...all[userId][idx], ...patch, updatedAt: Date.now() };
+    this._save(all);
+    return all[userId][idx];
+  }
+
+  hasActive(userId) { return !!this.getActive(userId); }
+
+  getWaiting() {
+    const all = this._getAll(), out = [], now = Date.now(), TTL = 5 * 60 * 1000;
+    for (const uid in all) {
+      for (const o of all[uid]) {
+        if ((o.status === "WAITING" || o.status === "PENDING") && (now - o.createdAt) < TTL) {
+          out.push({ userId: uid, order: o });
+        }
+      }
+    }
+    return out;
+  }
+
+  getExpired() {
+    const all = this._getAll(), out = [], now = Date.now(), TTL = 5 * 60 * 1000;
+    for (const uid in all) {
+      for (const o of all[uid]) {
+        if ((o.status === "WAITING" || o.status === "PENDING") && (now - o.createdAt) >= TTL) {
+          out.push({ userId: uid, order: o });
+        }
+      }
+    }
+    return out;
+  }
+}
+
+/* ==================== DEPOSIT MANAGER ==================== */
+class DepositManager {
+  constructor() { this.KEY = "otpku_deposits"; }
+
+  _db() {
+    try { return getDatabase(); } catch { return null; }
+  }
+
+  _getAll() {
+    try { return this._db()?.setting(this.KEY) || {}; } catch { return {}; }
+  }
+
+  _save(data) {
+    try { this._db()?.setting(this.KEY, data); } catch {}
+  }
+
+  saveDeposit(userId, data) {
+    const all = this._getAll();
+    if (!all[userId]) all[userId] = [];
+    all[userId].push({ ...data, createdAt: Date.now(), updatedAt: Date.now() });
+    this._save(all);
+    return all[userId];
+  }
+
+  getUserDeposits(userId) {
+    return this._getAll()[userId] || [];
+  }
+
+  getPending(userId) {
+    return this.getUserDeposits(userId).filter(d => d.status === "PENDING");
+  }
+
+  getByTxId(userId, txId) {
+    return this.getUserDeposits(userId).find(d => d.transaction_id === txId) || null;
+  }
+
+  update(userId, txId, patch) {
+    const all = this._getAll();
+    if (!all[userId]) return null;
+    const idx = all[userId].findIndex(d => d.transaction_id === txId);
+    if (idx === -1) return null;
+    all[userId][idx] = { ...all[userId][idx], ...patch, UpdatedAt: Date.now() };
+    this._save(all);
+    return all[userId][idx];
+  }
+}
+
+/* ==================== POLLER ==================== */
+let pollerInterval = null;
+let isPolling = false;
+
+function startOtpPoller(sock, api, manager) {
+  if (pollerInterval) return pollerInterval;
+  console.log("[OTPKU] Poller started (10s interval)");
+
+  pollerInterval = setInterval(async () => {
+    if (isPolling) return;
+    isPolling = true;
+    try {
+      for (const { userId, order } of manager.getWaiting()) {
+        try {
+          const res = await api.getStatus(order.id);
+          if (res.success && (res.status === "OK" || res.status === "SUCCESS")) {
+            manager.update(userId, order.id, { status: "COMPLETED", smsCode: res.sms || res.code || "" });
+            const s = SERVICE_MAP[order.service] || { emoji: "📱", label: order.service };
+            await sock.sendMessage(userId, {
+              text: `✅ *SMS OTP DITERIMA!*\n\n${s.emoji} *Layanan*: ${s.label}\n📱 *Nomor*: +${order.number}\n🔑 *Kode OTP*: \`${res.sms || res.code || "Tidak ditemukan"}\`\n\nGunakan kode di atas untuk verifikasi akun Anda.`
+            });
+          } else if (res.status === "CANCEL" || res.status === "EXPIRED") {
+            manager.update(userId, order.id, { status: "CANCELLED" });
+          }
+        } catch (e) { console.error("[OTPKU] Poll error:", e.message); }
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      for (const { userId, order } of manager.getExpired()) {
+        try {
+          await api.cancelActivation(order.id);
+          manager.update(userId, order.id, { status: "TIMEOUT" });
+          await sock.sendMessage(userId, {
+            text: `⏰ *Order Timeout!*\n\n📱 Nomor: +${order.number}\n⏱️ Tidak ada SMS masuk selama 5 menit.\n\nOrder telah dibatalkan otomatis.\nSilakan coba lagi dengan \`.otpku\``
+          });
+        } catch (e) { console.error("[OTPKU] Cancel error:", e.message); }
+      }
+    } catch (e) { console.error("[OTPKU] Poller error:", e.message); }
+    finally { isPolling = false; }
+  }, 10000);
+
+  return pollerInterval;
+}
+
+function stopOtpPoller() {
+  if (pollerInterval) { clearInterval(pollerInterval); pollerInterval = null; console.log("[OTPKU] Poller stopped"); }
+}
+
+/* ==================== HELPERS ==================== */
+const rupiah = (n) => `Rp ${Number(n || 0).toLocaleString("id-ID")}`;
+const usd = (n) => `$${Number(n || 0).toFixed(2)}`;
+const svcEmoji = (s) => SERVICE_MAP[s]?.emoji || "📱";
+const svcLabel = (s) => SERVICE_MAP[s]?.label || s;
+const fmtDate = (ts) => new Date(ts).toLocaleString("id-ID");
+
+// Smart price formatter:
+// - getPrices returns USD (e.g. 0.33)
+// - getNumber returns IDR (e.g. 4950)
+function formatPrice(cost) {
+  const c = Number(cost) || 0;
+  if (c >= 100) {
+    // Already IDR (from getNumber)
+    return rupiah(c);
+  } else {
+    // USD (from getPrices)
+    const idr = Math.round(c * 16000);
+    return `${usd(c)} USD (~${rupiah(idr)})`;
+  }
+}
+
+/* ==================== HANDLER UTAMA ==================== */
+async function handler(m, context) {
+  if (!context) context = {};
+  const { sock, config: botConfig } = context;
+  
+  let args = [];
+  if (Array.isArray(context.args)) {
+    args = context.args;
+  } else if (typeof context.args === "string") {
+    args = context.args.trim().split(/\s+/).filter(Boolean);
+  }
+
+  const prefix = botConfig?.command?.prefix || ".";
+  const api = new OTPKUApi();
+  const orderManager = new OrderManager();
+  const depositManager = new DepositManager();
+
+  if (!pollerInterval) startOtpPoller(sock, api, orderManager);
+
+  let sub = "";
+  let extraArgs = [];
+
+  if (Array.isArray(args) && args.length > 0) {
+    sub = String(args[0]).toLowerCase().trim();
+  }
+
+  if (!sub && m?.command?.startsWith("otpku_")) {
+    const raw = m.command.replace("otpku_", "");
+    
+    const exactMap = {
+      "batal_last": "batal_last",
+      "cekdeposit": "cekdeposit",
+      "saldo": "saldo",
+      "status": "status",
+      "harga": "harga",
+      "topup": "topup",
+      "batal": "batal",
+      "beli": "beli",
+    };
+    
+    if (exactMap[raw]) {
+      sub = exactMap[raw];
+    } else if (raw.startsWith("topup_")) {
+      sub = "topup";
+      extraArgs = [raw.replace("topup_", "")];
+    } else if (raw.startsWith("beli_")) {
+      sub = "beli";
+      extraArgs = [raw.replace("beli_", "")];
+    } else if (raw.startsWith("batal_")) {
+      sub = "batal";
+      extraArgs = [raw.replace("batal_", "")];
+    } else {
+      const parts = raw.split("_");
+      sub = parts[0];
+      extraArgs = parts.slice(1);
+    }
+  }
+
+  const mergedArgs = [...extraArgs, ...(args?.slice(1) || [])];
+
+  switch (sub) {
+    case "beli":       return await cmdBeli(m, sock, api, orderManager, mergedArgs);
+    case "saldo":      return await cmdSaldo(m, sock, api);
+    case "status":     return await cmdStatus(m, sock, api, orderManager);
+    case "batal":      return await cmdBatal(m, sock, api, orderManager, mergedArgs);
+    case "batal_last": return await cmdBatalLast(m, sock, api, orderManager);
+    case "harga":      return await cmdHarga(m, sock, api);
+    case "topup":      return await cmdTopup(m, sock, api, depositManager, mergedArgs, prefix);
+    case "cekdeposit": return await cmdCekDeposit(m, sock, api, depositManager, mergedArgs);
+    default:           return await cmdMenu(m, sock, api, orderManager, depositManager, botConfig, prefix);
+  }
+}
+
+/* ==================== COMMANDS ==================== */
+async function cmdMenu(m, sock, api, orderManager, depositManager, botConfig, prefix) {
+  let balance = "❓", isCF = false;
+  try {
+    const b = await api.getBalance();
+    if (b.success) balance = rupiah(b.balance);
+    else if (b.isCloudflare) { balance = "⚠️ Cloudflare"; isCF = true; }
+    else balance = "⚠️ Error";
+  } catch { balance = "⚠️ Error"; }
+
+  const active = orderManager.getActive(m.sender);
+  let statusOrder = "Tidak ada", orderId = "";
+  if (active) {
+    const cInfo = COUNTRY_MAP[active.country] || { emoji: "🌏", name: "Unknown" };
+    statusOrder = `${cInfo.emoji} ${svcEmoji(active.service)} ${svcLabel(active.service)} → +${active.number}`;
+    orderId = active.id;
+  }
+
+  let text = `🌟 *OTPKU - Virtual Number Service*\n\n`;
+  if (isCF) text += `⚠️ *Cloudflare Protection Terdeteksi!*\nCoba gunakan VPN atau akses via browser.\n\n`;
+  text += `💰 *Saldo*: ${balance}\n📋 *Order Aktif*: ${statusOrder}\n\n📌 *Pilih menu di bawah:*`;
+
+  const rows = [
+    { title: "🇵🇭 Beli Nomor (PH)", description: `Philippines • ${balance}`, id: `${prefix}otpku_beli_ph` },
+    { title: "🇮🇩 Beli Nomor (ID)", description: `Indonesia • ${balance}`, id: `${prefix}otpku_beli_id` },
+    { title: "💰 Cek Saldo",       description: "Lihat saldo OTPKU Anda", id: `${prefix}otpku_saldo` },
+  ];
+
+  if (active) {
+    rows.push(
+      { title: "📋 Status Order", description: `ID: ${orderId}`, id: `${prefix}otpku_status` },
+      { title: "❌ Batal Terakhir", description: "Batalkan order terakhir", id: `${prefix}otpku_batal_last` },
+      { title: "📋 Lihat Order Aktif", description: "List & batal order", id: `${prefix}otpku_batal` }
+    );
+  }
+
+  rows.push({ title: "📊 Cek Harga", description: "Harga WhatsApp ID & PH", id: `${prefix}otpku_harga` });
+
+  if (m.isOwner) {
+    rows.push(
+      { title: "💳 Topup Saldo", description: "Isi saldo OTPKU (Owner)", id: `${prefix}otpku_topup` },
+      { title: "🔍 Cek Deposit", description: "Cek status deposit (Owner)", id: `${prefix}otpku_cekdeposit` }
+    );
+  }
+
+  let manual = `\n\n*📝 Perintah Manual:*\n`;
+  manual += `• \`${prefix}otpku beli ph\` → Beli nomor Philippines\n`;
+  manual += `• \`${prefix}otpku beli id\` → Beli nomor Indonesia\n`;
+  manual += `• \`${prefix}otpku saldo\` → Cek saldo\n`;
+  if (active) {
+    manual += `• \`${prefix}otpku status\` → Cek status order\n`;
+    manual += `• \`${prefix}otpku batal\` → Lihat & batalkan order\n`;
+    manual += `• \`${prefix}otpku batal_last\` → Batal order terakhir\n`;
+  }
+  manual += `• \`${prefix}otpku harga\` → Harga WhatsApp\n`;
+  if (m.isOwner) {
+    manual += `• \`${prefix}otpku topup\` → Menu topup saldo\n`;
+    manual += `• \`${prefix}otpku cekdeposit\` → Riwayat deposit\n`;
+  }
+
+  try {
+    await sock.sendMessage(m.chat, {
+      text: text + manual,
+      footer: `🪸 ${botConfig?.bot?.name || "Bot"}`,
+      interactiveButtons: [{
+        name: "single_select",
+        buttonParamsJson: JSON.stringify({
+          title: "📱 Menu OTPKU",
+          sections: [{ title: "Pilih Aksi", rows }],
+          icon: "DEFAULT"
+        })
+      }]
+    }, { quoted: m });
+  } catch {
+    await m.reply(text + manual);
+  }
+}
+
+async function cmdBeli(m, sock, api, manager, extraArgs) {
+  if (manager.hasActive(m.sender)) {
+    const a = manager.getActive(m.sender);
+    const cInfo = COUNTRY_MAP[a.country] || { emoji: "🌏", name: "Unknown" };
+    return m.reply(
+      `⚠️ *Anda masih memiliki order aktif!*\n\n` +
+      `${cInfo.emoji} ${svcEmoji(a.service)} *${svcLabel(a.service)}*\n` +
+      `📱 Nomor: +${a.number}\n` +
+      `🆔 ID: \`${a.id}\`\n` +
+      `⏱️ Status: Menunggu SMS OTP\n\n` +
+      `Gunakan \`.otpku batal\` untuk membatalkan.`
+    );
+  }
+
+  let countryCode = 6;
+  let countryArg = (extraArgs[0] || "").toLowerCase();
+
+  if (countryArg === "ph" || countryArg === "philippines" || countryArg === "4") {
+    countryCode = 4;
+  } else if (countryArg === "id" || countryArg === "indonesia" || countryArg === "6") {
+    countryCode = 6;
+  } else if (!countryArg) {
+    return m.reply(
+      `🌍 *Pilih Negara untuk Nokos*\n\n` +
+      `🇵🇭 *Philippines* → \`.otpku beli ph\`\n` +
+      `🇮🇩 *Indonesia* → \`.otpku beli id\`\n\n` +
+      `Atau klik button di menu utama.`
+    );
+  }
+
+  const cInfo = COUNTRY_MAP[countryCode] || { code: String(countryCode), name: "Unknown", emoji: "🌏" };
+
+  try {
+    await m.reply(`🔄 *Membeli nomor WhatsApp ${cInfo.emoji} ${cInfo.name}...*\nMohon tunggu sebentar.`);
+    const res = await api.getNumber("wa", countryCode);
+
+    console.log("[OTPKU] getNumber response:", JSON.stringify(res, null, 2));
+
+    const orderId = res?.activation_id ?? res?.id ?? res?.data?.activation_id ?? res?.data?.id;
+    const phoneNumber = res?.phone_number ?? res?.phone ?? res?.number ?? res?.data?.phone_number ?? res?.data?.phone;
+    const price = res?.cost ?? res?.price ?? res?.amount ?? res?.data?.cost ?? 0;
+    const country = res?.country ?? String(countryCode);
+    const expiresAt = res?.expires_at ?? res?.expiresAt ?? res?.data?.expires_at;
+
+    if (res.success && orderId && phoneNumber) {
+      const data = {
+        id: String(orderId),
+        number: String(phoneNumber),
+        service: "wa",
+        status: "WAITING",
+        smsCode: null,
+        price: price,
+        country: country,
+        expires_at: expiresAt || null,
+      };
+      manager.saveOrder(m.sender, data);
+      if (!pollerInterval) startOtpPoller(sock, api, manager);
+
+      let text = 
+        `✅ *Nomor Berhasil Dibeli!*\n\n` +
+        `${cInfo.emoji} *Negara*: ${cInfo.name}\n` +
+        `💬 *Layanan*: WhatsApp\n` +
+        `📱 *Nomor*: +${data.number}\n` +
+        `🆔 *Order ID*: \`${data.id}\`\n` +
+        `💰 *Harga*: ${formatPrice(data.price)}\n` +
+        `🕐 *Waktu*: ${fmtDate(Date.now())}\n`;
+      
+      if (expiresAt) text += `⏰ *Expired*: ${expiresAt}\n`;
+
+      text += `\n⏳ *Menunggu SMS OTP...*\n` +
+              `Bot akan otomatis memberi tahu saat SMS masuk.\n\n` +
+              `Gunakan \`.otpku\` untuk menu utama.`;
+
+      await m.reply(text);
+    } else {
+      let err = `❌ *Gagal membeli nomor!*\n\n`;
+      if (res.error) err += `Error: ${res.error}\n`;
+      else if (res.message) err += `Message: ${res.message}\n`;
+      else err += `Response tidak lengkap.\n`;
+      
+      err += `\n*Debug:*\n\`\`\`\n${JSON.stringify(res, null, 2).slice(0, 800)}\n\`\`\``;
+      if (res.isCloudflare) err += `\n\n⚠️ *Cloudflare Protection!*`;
+      await m.reply(err);
+    }
+  } catch (e) {
+    await m.reply(`❌ *Error:* ${e.message}`);
+  }
+}
+
+async function cmdSaldo(m, sock, api) {
+  try {
+    const res = await api.getBalance();
+    console.log("[OTPKU] getBalance response:", JSON.stringify(res, null, 2));
+    if (res.success) {
+      const bal = res?.balance ?? res?.data?.balance ?? res?.amount ?? 0;
+      await m.reply(`💰 *Saldo OTPKU*\n\nSaldo Anda: *${rupiah(bal)}*`);
+    } else {
+      await m.reply(`❌ *Gagal cek saldo:* ${res.error || res.message || "Unknown"}`);
+    }
+  } catch (e) {
+    await m.reply(`❌ *Error:* ${e.message}`);
+  }
+}
+
+async function cmdStatus(m, sock, api, manager) {
+  const a = manager.getActive(m.sender);
+  if (!a) return m.reply(`📋 *Tidak ada order aktif.*`);
+
+  try {
+    const res = await api.getStatus(a.id);
+    console.log("[OTPKU] getStatus response:", JSON.stringify(res, null, 2));
+    if (res.success) {
+      const cInfo = COUNTRY_MAP[a.country] || { emoji: "🌏", name: "Unknown" };
+      const map = { WAIT: "⏳ Menunggu SMS", OK: "✅ SMS Diterima", SUCCESS: "✅ SMS Diterima", CANCEL: "❌ Dibatalkan", EXPIRED: "⏰ Expired" };
+      let txt = 
+        `📋 *Status Order*\n\n` +
+        `${cInfo.emoji} *Negara*: ${cInfo.name}\n` +
+        `🆔 ID: \`${a.id}\`\n` +
+        `📱 Nomor: +${a.number}\n` +
+        `💬 Layanan: ${svcLabel(a.service)}\n` +
+        `📌 Status: ${map[res.status] || res.status}\n` +
+        `🕐 Dibuat: ${fmtDate(a.createdAt)}`;
+      if (a.expires_at) txt += `\n⏰ Expired: ${a.expires_at}`;
+      if (res.sms || res.code) txt += `\n🔑 *Kode OTP*: \`${res.sms || res.code}\``;
+      await m.reply(txt);
+    } else {
+      await m.reply(`❌ *Gagal cek status:* ${res.error || res.message || "Unknown"}`);
+    }
+  } catch (e) {
+    await m.reply(`❌ *Error:* ${e.message}`);
+  }
+}
+
+async function cmdBatal(m, sock, api, manager, extraArgs) {
+  const activeList = manager.getAllActive(m.sender);
+
+  if (extraArgs[0] === "last") {
+    return await cmdBatalLast(m, sock, api, manager);
+  }
+
+  if (extraArgs.length > 0 && extraArgs[0] !== "last") {
+    const targetId = extraArgs[0];
+    const order = manager.getById(m.sender, targetId);
+    if (!order) return m.reply(`❌ *Order ID \`${targetId}\` tidak ditemukan.*\n\nKetik \`.otpku batal\` untuk lihat list.`);
+    if (order.status !== "WAITING" && order.status !== "PENDING") {
+      return m.reply(`❌ *Order \`${targetId}\` sudah tidak aktif.*`);
+    }
+
+    try {
+      await m.reply(`🔄 *Membatalkan order \`${targetId}\`...*`);
+      const res = await api.cancelActivation(targetId);
+      if (res.success) {
+        manager.update(m.sender, targetId, { status: "CANCELLED" });
+        const cInfo = COUNTRY_MAP[order.country] || { emoji: "🌏", name: "Unknown" };
+        await m.reply(
+          `✅ *Order berhasil dibatalkan!*\n\n` +
+          `${cInfo.emoji} *Negara*: ${cInfo.name}\n` +
+          `🆔 ID: \`${targetId}\`\n` +
+          `📱 Nomor: +${order.number}\n` +
+          `💬 Layanan: ${svcLabel(order.service)}`
+        );
+      } else {
+        await m.reply(`❌ *Gagal membatalkan:* ${res.error || res.message || "Unknown"}`);
+      }
+    } catch (e) {
+      await m.reply(`❌ *Error:* ${e.message}`);
+    }
+    return;
+  }
+
+  if (activeList.length === 0) {
+    return m.reply(`📋 *Tidak ada order aktif untuk dibatalkan.*`);
+  }
+
+  let text = `📋 *Daftar Order Aktif*\n\n`;
+  for (let i = 0; i < activeList.length; i++) {
+    const o = activeList[i];
+    const cInfo = COUNTRY_MAP[o.country] || { emoji: "🌏", name: "Unknown" };
+    text += `${i + 1}. ${cInfo.emoji} \`${o.id}\`\n` +
+            `   📱 +${o.number} | ${svcEmoji(o.service)} ${svcLabel(o.service)}\n` +
+            `   🕐 ${fmtDate(o.createdAt)}\n\n`;
+  }
+
+  text += `*Cara membatalkan:*\nKetik: \`.otpku batal <ID>\`\nContoh: \`.otpku batal ${activeList[0].id}\`\n\n` +
+          `Atau ketik \`.otpku batal_last\` untuk batalin yang terakhir.`;
+
+  await m.reply(text);
+}
+
+async function cmdBatalLast(m, sock, api, manager) {
+  const a = manager.getActive(m.sender);
+  if (!a) return m.reply(`📋 *Tidak ada order aktif untuk dibatalkan.*`);
+
+  try {
+    await m.reply(`🔄 *Membatalkan order terakhir...*`);
+    const res = await api.cancelActivation(a.id);
+    if (res.success) {
+      manager.update(m.sender, a.id, { status: "CANCELLED" });
+      const cInfo = COUNTRY_MAP[a.country] || { emoji: "🌏", name: "Unknown" };
+      await m.reply(
+        `✅ *Order berhasil dibatalkan!*\n\n` +
+        `${cInfo.emoji} *Negara*: ${cInfo.name}\n` +
+        `🆔 ID: \`${a.id}\`\n` +
+        `📱 Nomor: +${a.number}\n` +
+        `💬 Layanan: ${svcLabel(a.service)}`
+      );
+    } else {
+      await m.reply(`❌ *Gagal membatalkan:* ${res.error || res.message || "Unknown"}`);
+    }
+  } catch (e) {
+    await m.reply(`❌ *Error:* ${e.message}`);
+  }
+}
+
+async function cmdHarga(m, sock, api) {
+  try {
+    let text = `📊 *Harga WhatsApp - OTPKU*\n\n`;
+    let hasData = false;
+
+    for (const countryId of [6, 4]) {
+      const res = await api.getPrices(countryId);
+      console.log(`[OTPKU] getPrices(${countryId}) response:`, JSON.stringify(res, null, 2));
+
+      const cInfo = COUNTRY_MAP[countryId] || { emoji: "🌏", name: "Unknown" };
+      
+      if (res.success && res.prices) {
+        const countryData = res.prices[String(countryId)] || res.prices;
+        const waData = countryData?.wa;
+
+        if (waData) {
+          hasData = true;
+          text += `${cInfo.emoji} *${cInfo.name}*\n`;
+          // getPrices returns USD
+          text += `   💬 WhatsApp: ${formatPrice(waData.cost)}\n`;
+          text += `   📦 Stock: ${(waData.count || 0).toLocaleString("id-ID")} nomor\n\n`;
+        } else {
+          text += `${cInfo.emoji} *${cInfo.name}*\n   ❌ Data WA tidak tersedia\n\n`;
+        }
+      } else {
+        text += `${cInfo.emoji} *${cInfo.name}*\n   ❌ ${res.error || "Gagal mengambil harga"}\n\n`;
+      }
+    }
+
+    if (!hasData) {
+      text += `⚠️ *Tidak ada data harga yang tersedia.*`;
+    }
+
+    text += `💡 *Tips:* Ketik \`.otpku beli id\` atau \`.otpku beli ph\` untuk membeli.`;
+
+    await m.reply(text);
+  } catch (e) {
+    await m.reply(`❌ *Error:* ${e.message}`);
+  }
+}
+
+async function cmdTopup(m, sock, api, depositManager, extraArgs, prefix) {
+  if (!m.isOwner) return m.reply(`❌ *Fitur ini hanya untuk owner bot.*`);
+
+  if (!extraArgs.length || !parseInt(extraArgs[0])) {
+    const rows = TOPUP_AMOUNTS.map(a => ({
+      title: `💳 ${rupiah(a)}`,
+      description: `Topup ${(a/1000).toLocaleString("id-ID")}k`,
+      id: `${prefix}otpku_topup_${a}`
+    }));
+
+    const text = 
+      `💳 *Topup Saldo OTPKU*\n\n` +
+      `Pilih nominal di bawah atau ketik manual:\n` +
+      `\`.otpku topup <nominal>\` (minimal Rp 10.000)`;
+
+    const sections = [];
+    const chunkSize = 10;
+    for (let i = 0; i < rows.length; i += chunkSize) {
+      const chunk = rows.slice(i, i + chunkSize);
+      const start = ((i + 1) * 10).toLocaleString("id-ID");
+      const end = ((i + chunk.length) * 10).toLocaleString("id-ID");
+      sections.push({
+        title: `Nominal ${start}k - ${end}k`,
+        rows: chunk
+      });
+    }
+
+    try {
+      await sock.sendMessage(m.chat, {
+        text,
+        footer: `🪸 OTPKU`,
+        interactiveButtons: [{
+          name: "single_select",
+          buttonParamsJson: JSON.stringify({
+            title: "💳 Pilih Nominal",
+            sections,
+            icon: "DEFAULT"
+          })
+        }]
+      }, { quoted: m });
+    } catch {
+      let fb = text + `\n\n*Manual:*\n`;
+      TOPUP_AMOUNTS.forEach(a => {
+        fb += `• \`.otpku topup ${a}\`\n`;
+      });
+      await m.reply(fb);
+    }
+    return;
+  }
+
+  const amount = parseInt(extraArgs[0]);
+  if (amount < 10000) {
+    return m.reply(`❌ *Minimal topup Rp 10.000*`);
+  }
+
+  try {
+    await m.reply(`🔄 *Membuat deposit Rp ${amount.toLocaleString("id-ID")}...*`);
+    const res = await api.createDeposit(amount);
+    console.log("[OTPKU] createDeposit response:", JSON.stringify(res, null, 2));
+
+    if (res.success) {
+      const txId = res?.transaction_id ?? res?.transactionId ?? res?.id ?? res?.data?.transaction_id;
+      const qrisUrl = res?.qris_url ?? res?.qr_url ?? res?.data?.qris_url ?? res?.data?.qr_url;
+      const payAmount = res?.pay_amount ?? res?.payAmount ?? res?.amount ?? res?.data?.pay_amount ?? amount;
+      const expiresAt = res?.expires_at ?? res?.expiresAt ?? res?.data?.expires_at;
+      const bonusPct = res?.bonus_percent ?? res?.bonusPercent ?? res?.data?.bonus_percent ?? 0;
+      const bonusAmt = res?.bonus_amount ?? res?.bonusAmount ?? res?.data?.bonus_amount ?? 0;
+
+      if (!txId) {
+        return m.reply(`❌ *Deposit response tidak lengkap!*\n\n\`\`\`\n${JSON.stringify(res, null, 2).slice(0, 600)}\n\`\`\``);
+      }
+
+      const depositData = {
+        transaction_id: String(txId),
+        amount: amount,
+        pay_amount: payAmount,
+        status: "PENDING",
+        qris_url: qrisUrl || null,
+        expires_at: expiresAt || null,
+        bonus_percent: bonusPct,
+        bonus_amount: bonusAmt,
+      };
+      depositManager.saveDeposit(m.sender, depositData);
+
+      let text = 
+        `💳 *Deposit Berhasil Dibuat!*\n\n` +
+        `💰 Nominal: *${rupiah(amount)}*\n` +
+        `🆔 Transaction ID: \`${txId}\`\n` +
+        `⏳ Status: *PENDING*\n`;
+
+      if (bonusPct > 0) {
+        text += `🎁 Bonus: *${bonusPct}%* (+${rupiah(bonusAmt)})\n`;
+      }
+      if (payAmount && payAmount !== amount) {
+        text += `💳 Bayar: *${rupiah(payAmount)}*\n`;
+      }
+      text += `🕐 Waktu: ${fmtDate(Date.now())}\n`;
+      if (expiresAt) {
+        text += `⏰ Expired: ${expiresAt}\n`;
+      }
+
+      text += `\n*Cek status:*\n\`.otpku cekdeposit ${txId}\`\n\n⚠️ Segera bayar sebelum waktu expired.`;
+
+      if (qrisUrl) {
+        try {
+          await sock.sendMessage(m.chat, {
+            image: { url: qrisUrl },
+            caption: text,
+          }, { quoted: m });
+          return;
+        } catch (imgErr) {
+          console.error("[OTPKU] Gagal kirim QR image:", imgErr.message);
+          text += `\n📸 *QR Code:*\n${qrisUrl}`;
+        }
+      }
+
+      await m.reply(text);
+    } else {
+      await m.reply(`❌ *Gagal membuat deposit:* ${res.error || res.message || "Unknown"}`);
+    }
+  } catch (e) {
+    await m.reply(`❌ *Error:* ${e.message}`);
+  }
+}
+
+async function cmdCekDeposit(m, sock, api, depositManager, extraArgs) {
+  if (!m.isOwner) return m.reply(`❌ *Fitur ini hanya untuk owner bot.*`);
+
+  if (extraArgs.length > 0) {
+    const txId = extraArgs[0];
+    const local = depositManager.getByTxId(m.sender, txId);
+
+    try {
+      await m.reply(`🔍 *Mengecek deposit \`${txId}\`...*`);
+      const res = await api.checkDeposit(txId);
+      console.log("[OTPKU] checkDeposit response:", JSON.stringify(res, null, 2));
+
+      if (res.success) {
+        const status = res?.status ?? res?.data?.status ?? "UNKNOWN";
+        const amount = res?.amount ?? res?.data?.amount ?? local?.amount;
+        
+        if (local) {
+          depositManager.update(m.sender, txId, { status });
+        }
+
+        let text = 
+          `🔍 *Status Deposit*\n\n` +
+          `🆔 Transaction ID: \`${txId}\`\n` +
+          `💰 Amount: *${rupiah(amount)}*\n` +
+          `📌 Status: *${status}*\n`;
+        
+        if (local) {
+          text += `🕐 Dibuat: ${fmtDate(local.createdAt)}\n`;
+          if (local.qris_url) text += `📸 QR: ${local.qris_url}\n`;
+          if (local.expires_at) text += `⏰ Expired: ${local.expires_at}\n`;
+        }
+
+        await m.reply(text);
+      } else {
+        await m.reply(`❌ *Gagal cek deposit:* ${res.error || res.message || "Unknown"}`);
+      }
+    } catch (e) {
+      await m.reply(`❌ *Error:* ${e.message}`);
+    }
+    return;
+  }
+
+  const deposits = depositManager.getUserDeposits(m.sender);
+  if (deposits.length === 0) {
+    return m.reply(`📋 *Belum ada riwayat deposit.*\n\nKetik \`.otpku topup\` untuk mulai.`);
+  }
+
+  let text = `📋 *Riwayat Deposit*\n\n`;
+  const recent = deposits.slice(-5).reverse();
+  for (const d of recent) {
+    const statusIcon = d.status === "PENDING" ? "⏳" : d.status === "SUCCESS" ? "✅" : "❌";
+    text += `${statusIcon} \`${d.transaction_id}\`\n` +
+            `   💰 ${rupiah(d.amount)} | ${d.status}\n` +
+            `   🕐 ${fmtDate(d.createdAt)}\n\n`;
+  }
+
+  text += `*Cek detail:*\n\`.otpku cekdeposit <transaction_id>\`\nContoh: \`.otpku cekdeposit ${recent[0].transaction_id}\``;
+
+  await m.reply(text);
+}
+
+/* ==================== EXPORT ==================== */
+export default { config: pluginConfig, handler };
+export { startOtpPoller, stopOtpPoller, OTPKUApi, OrderManager, DepositManager };

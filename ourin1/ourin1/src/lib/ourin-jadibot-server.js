@@ -1,0 +1,724 @@
+import express from "express";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+import { WebSocketServer } from "ws";
+import { getSocket } from "../connection.js";
+import * as sysStats from "./ourin-system-stats.js";
+import {
+  requestJadibotPairing,
+  getJadibotStatus,
+  stopJadibot,
+  getAllJadibotSessions,
+  pauseJadibot,
+  resumeJadibot,
+  getJadibotLogs,
+  getAllJadibotLogs,
+  restartJadibotSession,
+  isJadibotRegistered,
+} from "./ourin-jadibot-manager.js";
+import * as authDb from "./ourin-auth-db.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PORT = 8080;
+
+let server = null;
+let wss = null;
+let appInstance = null; // ref untuk mountWaGateway (WA Client Gateway)
+
+/* ==========================================================================
+   WebSocket broadcast helper
+   dipakai App.connectSocket() di frontend (path "/ws")
+   ========================================================================== */
+function broadcast(type, payload = {}) {
+  if (!wss) return;
+  const data = JSON.stringify({ type, ...payload });
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1 /* OPEN */) client.send(data);
+  });
+}
+
+/* ==========================================================================
+   Auth middleware
+   ========================================================================== */
+function authRequired(req, res, next) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const user = authDb.getUserByToken(token);
+
+  if (!user) {
+    return res.status(401).json({ success: false, error: "Sesi berakhir, silakan login lagi." });
+  }
+  if (user.status === "banned") {
+    return res.status(401).json({ success: false, error: "Akun kamu diblokir." });
+  }
+  req.user = user;
+  next();
+}
+
+function adminRequired(req, res, next) {
+  if (!req.user || req.user.role !== "admin") {
+    return res.status(403).json({ success: false, error: "Akses ditolak." });
+  }
+  next();
+}
+
+function jidFromNumber(number) {
+  return String(number).replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+}
+
+// Terima "081234567890", "+62 812-3456-7890", "62 812 3456 7890", dll —
+// dirapikan jadi format 62xxxxxxxxxx. Nomor yang gak diawali 62/08 (abis
+// dibuang karakter non-digit) ditolak, return null.
+function normalizeIndonesianNumber(raw) {
+  let digits = String(raw || "").replace(/[^0-9]/g, "");
+  if (!digits) return null;
+  if (digits.startsWith("0")) {
+    digits = "62" + digits.slice(1);
+  }
+  if (!digits.startsWith("62")) return null;
+  if (digits.length < 9 || digits.length > 15) return null;
+  return digits;
+}
+
+/* ==========================================================================
+   Kuota bot: 1 bot per user, total stok diatur admin lewat settings.maxBot.
+   ========================================================================== */
+
+// Kalau user generate pairing code tapi gak pernah discan (batal, lupa,
+// dsb), slotnya jangan nyangkut selamanya — dianggap basi setelah 5 menit
+// kalau memang belum pernah beneran connect.
+const RESERVATION_TTL_MS = 5 * 60 * 1000;
+
+function isReservationStale(user) {
+  if (!user.botNumber) return false;
+  const jid = jidFromNumber(user.botNumber);
+  if (getJadibotStatus(jid)) return false; // udah beneran connect, bukan basi
+  if (isJadibotRegistered(jid)) return false; // pernah beneran pairing — cuma lagi offline, JANGAN dianggap basi
+  const reservedAt = user.botReservedAt || 0;
+  return Date.now() - reservedAt > RESERVATION_TTL_MS;
+}
+
+// Bersihin reservasi basi lalu balikin jumlah slot yang beneran terpakai
+// (aktif connect ATAU masih dalam masa tunggu discan).
+function releaseStaleReservations() {
+  const users = authDb.listUsers();
+  let used = 0;
+  for (const u of users) {
+    if (!u.botNumber) continue;
+    if (isReservationStale(u)) {
+      authDb.setUserBotNumber(u.id, null);
+      continue;
+    }
+    used++;
+  }
+  return used;
+}
+
+// Jadibot punya socket sendiri (lihat startJadibot() di ourin-jadibot-manager.js,
+// dia bikin auth state + makeWASocket independen). Socket bot utama di sini
+// cuma dipakai buat kirim notifikasi WA opsional, jadi kalau bot utama lagi
+// offline / belum pernah connect, jangan sampai bikin request pairing gagal —
+// cukup lempar null, safeSend() di manager sudah aman menerima socket kosong.
+function safeGetMainSocket() {
+  try {
+    return getSocket();
+  } catch {
+    return null;
+  }
+}
+
+/* ==========================================================================
+   App
+   ========================================================================== */
+function buildApp() {
+  const app = express();
+  app.use(express.json());
+  // public/ ada di root project, dua tingkat di atas src/lib/
+  app.use(express.static(path.join(__dirname, "..", "..", "public")));
+
+  /* ---------------------------------------------------------------------- */
+  /* Auth (dipakai login.js / register.js / app.js)                         */
+  /* ---------------------------------------------------------------------- */
+
+  app.post("/api/login", (req, res) => {
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: "Email dan password wajib diisi." });
+    }
+
+    const user = authDb.findUserByEmail(email);
+    if (!user || !authDb.verifyPassword(user, password)) {
+      return res.status(401).json({ success: false, error: "Email atau password salah." });
+    }
+    if (user.status === "banned") {
+      return res.status(403).json({ success: false, error: "Akun kamu diblokir." });
+    }
+
+    // Auto Logout (setting admin): kalau diisi, dipakai sebagai masa aktif
+    // token. 0/kosong = pakai default 7 hari.
+    const settings = authDb.getSettings();
+    const ttlMs = settings.autoLogoutMinutes > 0 ? settings.autoLogoutMinutes * 60 * 1000 : undefined;
+
+    const token = authDb.createSession(user.id, ttlMs);
+    authDb.addLog(user.email, "Login");
+    res.json({ success: true, token, user: authDb.sanitizeUser(user) });
+  });
+
+  app.post("/api/register", (req, res) => {
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ success: false, error: "Email dan password wajib diisi." });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ success: false, error: "Password minimal 8 karakter." });
+    }
+
+    const result = authDb.createUser({ email, password, role: "user" });
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    sysStats.recordNewUser(); // buat chart "User Baru" di statistik admin
+    authDb.addLog(email, "Registrasi akun baru");
+    res.json({ success: true });
+  });
+
+  app.post("/api/logout", authRequired, (req, res) => {
+    const header = req.headers.authorization || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+    if (token) authDb.destroySession(token);
+    res.json({ success: true });
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* Dashboard user (dipakai dashboard.js)                                  */
+  /* ---------------------------------------------------------------------- */
+
+  app.get("/api/dashboard", authRequired, (req, res) => {
+    const user = req.user;
+    let bot = null;
+
+    if (user.botNumber) {
+      const jid = jidFromNumber(user.botNumber);
+      const status = getJadibotStatus(jid);
+      if (status) {
+        bot = { number: user.botNumber, ...status };
+      } else {
+        // Session-nya ada (reservasi masih tercatat / pernah pairing),
+        // cuma lagi gak nyala di memori — ini beda dari "belum punya bot
+        // sama sekali". Tetap dikirim sebagai card offline biar
+        // dashboard.js gak nawarin bikin pairing baru.
+        bot = {
+          number: user.botNumber,
+          status: "offline",
+          paused: false,
+          name: null,
+          photo: null,
+          connectedAt: null,
+          runtimeSeconds: 0,
+        };
+      }
+    }
+
+    const settings = authDb.getSettings();
+    const used = releaseStaleReservations(); // sekalian bersihin slot basi punya user lain
+    res.json({
+      success: true,
+      bot,
+      limit: { used, max: settings.maxBot || 1 }, // stok TOTAL server, bukan kuota per user
+      maintenance: !!settings.maintenance,
+    });
+  });
+
+  app.post("/api/pairing", authRequired, async (req, res) => {
+    const { number } = req.body || {};
+    if (!number) {
+      return res.status(400).json({ success: false, error: "Nomor wajib diisi." });
+    }
+
+    const cleanNumber = normalizeIndonesianNumber(number);
+    if (!cleanNumber) {
+      return res.status(400).json({
+        success: false,
+        error: "Nomor harus diawali 62 atau 08 (contoh: 6281234567890 atau 081234567890).",
+      });
+    }
+
+    const settings = authDb.getSettings();
+
+    if (settings.maintenance && req.user.role !== "admin") {
+      return res.status(503).json({ success: false, error: "Sistem sedang maintenance, coba lagi nanti." });
+    }
+
+    const used = releaseStaleReservations();
+    const freshUser = authDb.findUserById(req.user.id); // re-read, siapa tau reservasi lamanya baru dibersihkan barusan
+
+    if (freshUser?.botNumber) {
+      const existingJid = jidFromNumber(freshUser.botNumber);
+      const isLive = !!getJadibotStatus(existingJid);
+      const everRegistered = isJadibotRegistered(existingJid);
+
+      if (isLive || everRegistered) {
+        // Bot beneran ada (lagi konek ATAU pernah pairing sukses & cuma offline) — blokir.
+        return res.status(400).json({ success: false, error: "Kamu sudah memiliki bot aktif." });
+      }
+
+      // Sisanya: reservasi ada tapi pairing sebelumnya gagal/expired,
+      // gak pernah kelar sampai discan. Bersihin sekarang juga biar
+      // user bisa langsung coba pairing ulang, gak perlu nunggu TTL 5 menit.
+      await stopJadibot(existingJid, true);
+      authDb.setUserBotNumber(freshUser.id, null);
+      authDb.addLog(req.user.email, `Membersihkan pairing gagal untuk +${freshUser.botNumber}`);
+    }
+
+    const maxStock = settings.maxBot || 1;
+    if (used >= maxStock) {
+      return res.status(503).json({
+        success: false,
+        error: `Stok bot server penuh (${used}/${maxStock}). Coba lagi nanti kalau ada slot kosong.`,
+      });
+    }
+
+    // Jadibot connect pakai socketnya sendiri, jadi tidak perlu nunggu
+    // bot utama online. socket utama cuma buat notifikasi WA (opsional).
+    const result = await requestJadibotPairing(safeGetMainSocket(), cleanNumber);
+    if (result.success) {
+      authDb.setUserBotNumber(req.user.id, cleanNumber);
+      authDb.addLog(req.user.email, `Membuat pairing untuk +${cleanNumber}`);
+    }
+    res.status(result.success ? 200 : 400).json({ id: cleanNumber, ...result });
+  });
+
+  const notifiedConnectedNumbers = new Set();
+
+  app.get("/api/pairing/:number/status", authRequired, (req, res) => {
+    const status = getJadibotStatus(jidFromNumber(req.params.number));
+    if (!status) {
+      return res.status(404).json({ success: false, error: "Belum terhubung" });
+    }
+    if (status.status === "connected") {
+      broadcast("pairing_status", { number: req.params.number, status: "connected" });
+      broadcast("bot_status", { number: req.params.number, data: status });
+
+      if (!notifiedConnectedNumbers.has(req.params.number)) {
+        notifiedConnectedNumbers.add(req.params.number);
+        sysStats.recordBotActive(); // buat chart "Bot Aktif per Jam"
+      }
+    }
+    res.json({ success: true, ...status });
+  });
+
+  app.post("/api/bot/stop", authRequired, async (req, res) => {
+    const { number } = req.body || {};
+    if (!number || number !== req.user.botNumber) {
+      return res.status(400).json({ success: false, error: "Nomor tidak valid." });
+    }
+    await stopJadibot(jidFromNumber(number), true);
+    authDb.setUserBotNumber(req.user.id, null);
+    authDb.addLog(req.user.email, `Menghentikan bot +${number}`);
+    broadcast("bot_status", { number, data: { status: "offline" } });
+    res.json({ success: true });
+  });
+
+  // Nyalain lagi bot yang lagi offline TANPA pairing ulang — pakai creds
+  // yang udah pernah berhasil pairing sebelumnya. Beda dari /api/pairing
+  // yang bikin pairing code baru.
+  app.post("/api/bot/start", authRequired, async (req, res) => {
+    const { number } = req.body || {};
+    if (!number || number !== req.user.botNumber) {
+      return res.status(400).json({ success: false, error: "Nomor tidak valid." });
+    }
+    const jid = jidFromNumber(number);
+    if (getJadibotStatus(jid)) {
+      return res.status(400).json({ success: false, error: "Bot sudah aktif." });
+    }
+    if (!isJadibotRegistered(jid)) {
+      return res.status(400).json({ success: false, error: "Session tidak ditemukan, silakan pairing ulang." });
+    }
+    restartJadibotSession(safeGetMainSocket(), number); // async, jalan di background — poll /api/dashboard buat lihat hasilnya
+    authDb.addLog(req.user.email, `Menyalakan ulang bot +${number}`);
+    res.json({ success: true });
+  });
+
+  // Beda dari /api/bot/stop di atas — koneksi WA TETAP hidup, cuma bot
+  // berhenti memproses pesan. Bisa dilanjutkan lagi lewat /api/bot/resume
+  // tanpa pairing ulang.
+  app.post("/api/bot/pause", authRequired, (req, res) => {
+    const { number } = req.body || {};
+    if (!number || number !== req.user.botNumber) {
+      return res.status(400).json({ success: false, error: "Nomor tidak valid." });
+    }
+    const result = pauseJadibot(jidFromNumber(number));
+    if (!result.success) return res.status(400).json(result);
+    authDb.addLog(req.user.email, `Menjeda bot +${number}`);
+    broadcast("bot_status", { number, data: { status: "paused", paused: true } });
+    res.json({ success: true });
+  });
+
+  app.post("/api/bot/resume", authRequired, (req, res) => {
+    const { number } = req.body || {};
+    if (!number || number !== req.user.botNumber) {
+      return res.status(400).json({ success: false, error: "Nomor tidak valid." });
+    }
+    const result = resumeJadibot(jidFromNumber(number));
+    if (!result.success) return res.status(400).json(result);
+    authDb.addLog(req.user.email, `Melanjutkan bot +${number}`);
+    broadcast("bot_status", { number, data: { status: "connected", paused: false } });
+    res.json({ success: true });
+  });
+
+  // Log aktivitas bot milik sendiri (connect/disconnect/pause/pesan masuk/error).
+  app.get("/api/bot/logs", authRequired, (req, res) => {
+    if (!req.user.botNumber) {
+      return res.json({ success: true, logs: [] });
+    }
+    res.json({ success: true, logs: getJadibotLogs(req.user.botNumber) });
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* Admin (dipakai admin.js) — semua butuh login + role admin              */
+  /* ---------------------------------------------------------------------- */
+
+  app.get("/api/admin/overview", authRequired, adminRequired, async (req, res) => {
+    const users = authDb.listUsers();
+    const sessions = safeGetAllSessions();
+    const botOnline = sessions.filter((s) => s.isActive).length;
+    const botOffline = Math.max(0, sessions.length - botOnline);
+
+    const [cpuPct, disk] = await Promise.all([sysStats.getCpuUsagePercent(), sysStats.getDiskUsage()]);
+    const ram = sysStats.getRamUsage();
+
+    res.json({
+      success: true,
+      totalUsers: users.length,
+      totalSessions: sessions.length,
+      botOnline,
+      botOffline,
+      uptime: formatUptime(process.uptime()),
+      cpu: cpuPct,
+      ram: ram.systemPct,
+      ramProcessPct: ram.processPct,
+      ramProcessMb: ram.processRssMb,
+      storage: disk.pct,
+      storageTotalGb: disk.totalGb,
+      history: sysStats.getHistory(),
+    });
+  });
+
+  app.get("/api/users", authRequired, adminRequired, (req, res) => {
+    const sessions = safeGetAllSessions();
+    const users = authDb.listUsers().map((u) => ({
+      ...u,
+      activeBots: u.botNumber && sessions.some((s) => s.id === u.botNumber && s.isActive) ? 1 : 0,
+    }));
+    res.json({ success: true, users });
+  });
+
+  app.post("/api/users/:id/ban", authRequired, adminRequired, (req, res) => {
+    const { banned } = req.body || {};
+    const result = authDb.setUserBanned(req.params.id, !!banned);
+    if (!result.success) return res.status(404).json(result);
+    authDb.addLog(req.user.email, `${banned ? "Ban" : "Unban"} user ${result.user.email}`);
+    res.json(result);
+  });
+
+  app.delete("/api/users/:id", authRequired, adminRequired, (req, res) => {
+    const target = authDb.findUserById(req.params.id);
+    const result = authDb.deleteUser(req.params.id);
+    if (!result.success) return res.status(404).json(result);
+    if (target) authDb.addLog(req.user.email, `Menghapus user ${target.email}`);
+    res.json(result);
+  });
+
+  app.post("/api/users/:id/role", authRequired, adminRequired, (req, res) => {
+    const { role } = req.body || {};
+    if (role !== "admin" && role !== "user") {
+      return res.status(400).json({ success: false, error: "Role tidak valid." });
+    }
+    const result = authDb.setUserRole(req.params.id, role);
+    if (!result.success) return res.status(404).json(result);
+    authDb.addLog(req.user.email, `Mengubah role ${result.user.email} jadi ${role}`);
+    res.json(result);
+  });
+
+  app.post("/api/users/:id/password", authRequired, adminRequired, (req, res) => {
+    const { password } = req.body || {};
+    if (!password || password.length < 8) {
+      return res.status(400).json({ success: false, error: "Password minimal 8 karakter." });
+    }
+    const result = authDb.setUserPassword(req.params.id, password);
+    if (!result.success) return res.status(404).json(result);
+    authDb.addLog(req.user.email, `Mengubah password user ${result.user.email}`);
+    res.json({ success: true });
+  });
+
+  // Nyambungin (ulang) satu nomor bot ke user tertentu. Dipakai buat
+  // benerin kasus session yang ada di disk (pernah pairing sukses) tapi
+  // link ke akun webnya keputus/hilang.
+  app.post("/api/users/:id/assign-bot", authRequired, adminRequired, (req, res) => {
+    const { number } = req.body || {};
+    const cleanNumber = normalizeIndonesianNumber(number);
+    if (!cleanNumber) {
+      return res.status(400).json({ success: false, error: "Nomor tidak valid." });
+    }
+    const target = authDb.findUserById(req.params.id);
+    if (!target) {
+      return res.status(404).json({ success: false, error: "User tidak ditemukan." });
+    }
+    if (!isJadibotRegistered(jidFromNumber(cleanNumber))) {
+      return res.status(400).json({ success: false, error: "Session untuk nomor ini tidak ditemukan di server." });
+    }
+
+    // Lepas dulu dari pemilik lama kalau ada, biar gak ada 2 user nyambung ke 1 nomor yang sama.
+    const previousOwner = authDb.findUserByBotNumber(cleanNumber);
+    if (previousOwner && String(previousOwner.id) !== String(target.id)) {
+      authDb.setUserBotNumber(previousOwner.id, null);
+    }
+
+    authDb.setUserBotNumber(target.id, cleanNumber);
+    authDb.addLog(req.user.email, `Menyambungkan bot +${cleanNumber} ke ${target.email}`);
+    res.json({ success: true });
+  });
+
+  app.get("/api/bots", authRequired, adminRequired, (req, res) => {
+    const sessions = safeGetAllSessions();
+    const bots = sessions.map((s) => {
+      const number = s.id;
+      const owner = authDb.findUserByBotNumber(number);
+      // getJadibotStatus() = data live dari memori (kalau sesi lagi aktif).
+      // sessions dari disk cuma nunjukin folder creds ada atau nggak.
+      const live = s.isActive ? getJadibotStatus(s.jid) : null;
+      return {
+        number,
+        owner: owner ? owner.email : "-",
+        status: live ? "online" : "offline",
+        runtimeSeconds: live ? live.runtimeSeconds : 0,
+      };
+    });
+    res.json({ success: true, bots });
+  });
+
+  app.post("/api/bots/:number/start", authRequired, adminRequired, (req, res) => {
+    const number = req.params.number;
+    const jid = jidFromNumber(number);
+    if (getJadibotStatus(jid)) {
+      return res.status(400).json({ success: false, error: "Bot sudah aktif." });
+    }
+    if (!isJadibotRegistered(jid)) {
+      return res.status(400).json({ success: false, error: "Session tidak ditemukan." });
+    }
+    restartJadibotSession(safeGetMainSocket(), number); // async, jalan di background
+    authDb.addLog(req.user.email, `Menyalakan ulang bot +${number}`);
+    res.json({ success: true });
+  });
+
+  app.post("/api/bots/:number/disconnect", authRequired, adminRequired, async (req, res) => {
+    try {
+      await stopJadibot(jidFromNumber(req.params.number), false);
+      authDb.addLog(req.user.email, `Disconnect bot +${req.params.number}`);
+      broadcast("bot_status", { number: req.params.number, data: { status: "offline" } });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.delete("/api/bots/:number/session", authRequired, adminRequired, async (req, res) => {
+    try {
+      await stopJadibot(jidFromNumber(req.params.number), true);
+      const owner = authDb.findUserByBotNumber(req.params.number);
+      if (owner) authDb.setUserBotNumber(owner.id, null);
+      authDb.addLog(req.user.email, `Menghapus session bot +${req.params.number}`);
+      broadcast("bot_status", { number: req.params.number, data: { status: "offline" } });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.get("/api/admin/logs", authRequired, adminRequired, (req, res) => {
+    res.json({ success: true, logs: authDb.getLogs() });
+  });
+
+  // Log aktivitas SELURUH jadibot (connect/disconnect/pause/pesan/error).
+  // ?number=628xxx buat filter satu bot aja.
+  app.get("/api/admin/bot-logs", authRequired, adminRequired, (req, res) => {
+    const { number } = req.query || {};
+    if (number) {
+      return res.json({ success: true, logs: getJadibotLogs(String(number)) });
+    }
+    res.json({ success: true, logs: getAllJadibotLogs() });
+  });
+
+  app.get("/api/admin/settings", authRequired, adminRequired, (req, res) => {
+    res.json({ success: true, ...authDb.getSettings() });
+  });
+
+  app.post("/api/admin/settings", authRequired, adminRequired, (req, res) => {
+    const { maxBot, maintenance, maxBotPerUser, autoDeleteSessionHours, autoLogoutMinutes } = req.body || {};
+    const current = authDb.getSettings();
+    const settings = authDb.updateSettings({
+      maxBot: Number(maxBot) || 1,
+      maintenance: !!maintenance,
+      maxBotPerUser: maxBotPerUser !== undefined ? Math.max(1, Number(maxBotPerUser) || 1) : current.maxBotPerUser,
+      autoDeleteSessionHours:
+        autoDeleteSessionHours !== undefined
+          ? Math.max(0, Number(autoDeleteSessionHours) || 0)
+          : current.autoDeleteSessionHours,
+      autoLogoutMinutes:
+        autoLogoutMinutes !== undefined ? Math.max(0, Number(autoLogoutMinutes) || 0) : current.autoLogoutMinutes,
+    });
+    authDb.addLog(req.user.email, "Memperbarui pengaturan sistem");
+    res.json({ success: true, ...settings });
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* Flow lama tanpa login (index.html + script.js di root public/)         */
+  /* ---------------------------------------------------------------------- */
+
+  app.post("/api/jadibot", async (req, res) => {
+    const { number } = req.body || {};
+    const cleanNumber = normalizeIndonesianNumber(number);
+    if (!cleanNumber) {
+      return res.status(400).json({
+        success: false,
+        error: "Nomor harus diawali 62 atau 08 (contoh: 6281234567890 atau 081234567890).",
+      });
+    }
+
+    const settings = authDb.getSettings();
+
+    if (settings.maintenance) {
+      return res.status(503).json({ success: false, error: "Sistem sedang maintenance, coba lagi nanti." });
+    }
+
+    const used = releaseStaleReservations();
+    const maxStock = settings.maxBot || 1;
+    if (used >= maxStock) {
+      return res.status(503).json({
+        success: false,
+        error: `Stok bot server penuh (${used}/${maxStock}). Coba lagi nanti kalau ada slot kosong.`,
+      });
+    }
+
+    // Sama seperti /api/pairing — tidak lagi wajib nunggu bot utama online.
+    const result = await requestJadibotPairing(safeGetMainSocket(), cleanNumber);
+    res.status(result.success ? 200 : 400).json(result);
+  });
+
+  app.get("/api/jadibot/:number/status", (req, res) => {
+    const jid = jidFromNumber(req.params.number);
+    const status = getJadibotStatus(jid);
+
+    if (!status) {
+      return res.status(404).json({ success: false, error: "Belum terhubung" });
+    }
+
+    res.json({ success: true, ...status });
+  });
+
+  app.post("/api/jadibot/:number/stop", async (req, res) => {
+    const jid = jidFromNumber(req.params.number);
+    await stopJadibot(jid, true);
+    res.json({ success: true });
+  });
+
+  return app;
+}
+
+function safeGetAllSessions() {
+  try {
+    return getAllJadibotSessions() || [];
+  } catch {
+    return [];
+  }
+}
+
+function formatUptime(seconds) {
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}h ${h}j`;
+  if (h > 0) return `${h}j ${m}m`;
+  return `${m}m`;
+}
+
+/* ==========================================================================
+   Auto Delete Session — job berkala, cuma jalan kalau admin set
+   settings.autoDeleteSessionHours > 0. Session yang lagi TIDAK aktif dan
+   file credsnya lebih tua dari N jam akan dihapus + slot ownernya dilepas.
+   ========================================================================== */
+let autoDeleteTimer = null;
+function startAutoDeleteSessionJob() {
+  if (autoDeleteTimer) return;
+  const CHECK_INTERVAL_MS = 15 * 60 * 1000; // cek tiap 15 menit
+
+  const tick = async () => {
+    try {
+      const settings = authDb.getSettings();
+      const hours = settings.autoDeleteSessionHours;
+      if (!hours || hours <= 0) return;
+
+      const cutoff = Date.now() - hours * 3600 * 1000;
+      const sessions = safeGetAllSessions();
+
+      for (const s of sessions) {
+        if (s.isActive) continue; // masih konek, jangan disentuh
+        try {
+          const stat = fs.statSync(s.credsPath);
+          if (stat.mtimeMs < cutoff) {
+            await stopJadibot(s.jid, true);
+            const owner = authDb.findUserByBotNumber(s.id);
+            if (owner) authDb.setUserBotNumber(owner.id, null);
+            authDb.addLog("system", `Auto-delete session tidak aktif: +${s.id}`);
+          }
+        } catch { }
+      }
+    } catch { }
+  };
+
+  autoDeleteTimer = setInterval(tick, CHECK_INTERVAL_MS);
+  tick();
+}
+
+// Panggil ini SEKALI dari file utama (setelah/sebelum startConnection, bebas -
+// getSocket() dipanggil belakangan per-request jadi tidak masalah urutannya).
+function startJadibotApiServer() {
+  if (server) return server;
+  const app = buildApp();
+  appInstance = app;
+  server = app.listen(PORT, () => {
+    console.log(`Jadibot web tersedia di http://localhost:${PORT}`);
+  });
+
+  wss = new WebSocketServer({ server, path: "/ws" });
+  wss.on("connection", () => {
+    // client sudah terhubung, broadcast() akan menjangkau dia
+  });
+
+  sysStats.startSystemSampler(); // buat chart CPU/RAM realtime di admin
+  startAutoDeleteSessionJob(); // no-op kalau settingnya 0/nonaktif
+
+  return server;
+}
+
+export { startJadibotApiServer, broadcast, mountWaGateway, getHttpServer };
+
+// ===== WA Client Gateway hooks (opsional, tidak mengubah perilaku panel) =====
+// mountWaGateway(router): pasang router Express external di path /wa-gateway.
+// getHttpServer(): server HTTP panel, untuk attach WebSocketServer tambahan.
+function mountWaGateway(router) {
+  if (!appInstance) return false;
+  try {
+    appInstance.use("/wa-gateway", router);
+    console.log("[WaGateway] Router mounted di /wa-gateway");
+    return true;
+  } catch (e) {
+    console.error("[WaGateway] mount gagal:", e.message);
+    return false;
+  }
+}
+
+function getHttpServer() {
+  return server;
+}

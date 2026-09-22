@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MikuWA Gateway — Debug Client</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- LOGIN -->
+  <div id="screen-login" class="screen">
+    <div class="card">
+      <h1>MikuWA Gateway</h1>
+      <p class="sub">Debug client — bukan produk final</p>
+      <label>Gateway URL
+        <input id="in-url" value="" placeholder="http://127.0.0.1:8787" />
+      </label>
+      <label>Username
+        <input id="in-user" value="admin" autocomplete="username" />
+      </label>
+      <label>Password
+        <input id="in-pass" type="password" autocomplete="current-password" />
+      </label>
+      <button id="btn-login" class="primary">Login</button>
+      <pre id="login-err" class="err"></pre>
+    </div>
+  </div>
+
+  <!-- APP -->
+  <div id="screen-app" class="screen hidden">
+    <header>
+      <div>
+        <strong>MikuWA Debug</strong>
+        <span id="badge-adapter" class="badge"></span>
+      </div>
+      <div class="status-group">
+        <span id="badge-ws" class="dot"></span><small>WS</small>
+        <span id="badge-bot" class="dot"></span><small>Bot</small>
+        <span id="uptime"></span>
+      </div>
+      <button id="btn-logout" class="ghost">Logout</button>
+    </header>
+
+    <nav>
+      <button data-tab="chats" class="active">Chats</button>
+      <button data-tab="settings">Settings</button>
+      <button data-tab="plugins">Plugins</button>
+      <button data-tab="devices">Devices</button>
+    </nav>
+
+    <main>
+      <!-- CHATS -->
+      <section id="tab-chats">
+        <div class="toolbar">
+          <input id="in-search" placeholder="Cari chat..." />
+          <button id="btn-refresh" class="ghost">Refresh</button>
+        </div>
+        <div class="split">
+          <ul id="chat-list" class="list"></ul>
+          <div id="chat-view" class="chat-view hidden">
+            <div class="chat-head">
+              <button id="btn-back" class="ghost">←</button>
+              <strong id="chat-title"></strong>
+            </div>
+            <div id="msg-list" class="msg-list"></div>
+            <div class="composer">
+              <input id="in-msg" placeholder="Ketik pesan..." />
+              <button id="btn-send" class="primary">Kirim</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="tab-settings" class="hidden">
+        <div class="card wide">
+          <h3>Bot Settings</h3>
+          <label>Bot Name <input id="s-name" /></label>
+          <label>Prefix <input id="s-prefix" maxlength="4" /></label>
+          <fieldset>
+            <legend>Mode</legend>
+            <label><input type="radio" name="s-mode" value="public" /> Public</label>
+            <label><input type="radio" name="s-mode" value="self" /> Self</label>
+          </fieldset>
+          <label class="row"><input type="checkbox" id="s-autoread" /> Auto Read</label>
+          <label class="row"><input type="checkbox" id="s-autotyping" /> Auto Typing</label>
+          <button id="btn-save-settings" class="primary">Simpan ke Bot</button>
+          <pre id="settings-result" class="ok"></pre>
+          <p class="note">Mode "private" belum didukung bot core (checkMode hanya kenal public/self).</p>
+        </div>
+      </section>
+
+      <!-- PLUGINS -->
+      <section id="tab-plugins" class="hidden">
+        <ul id="plugin-list" class="list"></ul>
+      </section>
+
+      <!-- DEVICES -->
+      <section id="tab-devices" class="hidden">
+        <ul id="device-list" class="list"></ul>
+      </section>
+    </main>
+
+    <pre id="ws-log" class="wslog"></pre>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

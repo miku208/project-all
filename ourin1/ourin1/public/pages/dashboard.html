@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard — JadiBot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+  <div class="scanlines" aria-hidden="true"></div>
+
+  <div class="app-shell">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="brand-row">
+        <span class="brand-mark"><i class="fa-solid fa-bolt"></i></span>
+        <span class="brand-name">Jadi<span class="accent">bot</span></span>
+      </div>
+
+      <nav class="nav-group">
+        <a class="nav-link active" href="dashboard.html"><i class="fa-solid fa-gauge"></i> Dashboard</a>
+      </nav>
+
+      <div class="nav-foot">
+        <div class="user-chip">
+          <span class="avatar" data-user-avatar>U</span>
+          <span class="who">
+            <strong data-user-name>—</strong>
+            <span data-user-email>—</span>
+          </span>
+        </div>
+        <a class="nav-link" href="#" data-logout><i class="fa-solid fa-right-from-bracket"></i> Keluar</a>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <div>
+      <header class="topbar">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <button class="menu-toggle" aria-label="Buka menu"><i class="fa-solid fa-bars"></i></button>
+          <h2>Dashboard</h2>
+        </div>
+        <span class="eyebrow"><span class="dot" id="connDot"></span><span id="connLabel">memuat</span></span>
+      </header>
+
+      <main class="main-content">
+        <!-- stat grid -->
+        <div class="stat-grid" id="statGrid">
+          <div class="card stat-card">
+            <div class="stat-top">
+              <span class="stat-label">Status Bot</span>
+              <span class="stat-icon"><i class="fa-solid fa-robot"></i></span>
+            </div>
+            <div class="stat-value" id="statStatus">—</div>
+            <span class="badge off" id="statStatusBadge">memuat…</span>
+          </div>
+
+          <div class="card stat-card">
+            <div class="stat-top">
+              <span class="stat-label">Runtime</span>
+              <span class="stat-icon"><i class="fa-solid fa-clock-rotate-left"></i></span>
+            </div>
+            <div class="stat-value mono" id="statRuntime">00:00:00</div>
+            <span class="stat-sub">sejak terhubung</span>
+          </div>
+
+          <div class="card stat-card">
+            <div class="stat-top">
+              <span class="stat-label">Limit</span>
+              <span class="stat-icon"><i class="fa-solid fa-gauge-high"></i></span>
+            </div>
+            <div class="stat-value mono" id="statLimit">1 / 1</div>
+            <div class="bar"><span id="statLimitBar" style="width:0%"></span></div>
+          </div>
+        </div>
+
+        <!-- bot card -->
+        <section class="card bot-card" id="botCard">
+          <div class="skel" style="height: 160px;"></div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- PAIRING MODAL -->
+  <div class="modal-overlay hidden" id="pairModal">
+    <div class="modal" style="max-width: 420px;">
+      <!-- step: nomor -->
+      <div id="pairStepNumber">
+        <h3>Jadi Bot</h3>
+        <p>Masukkan nomor WhatsApp yang ingin kamu jadikan bot.</p>
+        <div class="field">
+          <label for="pairNumber">Nomor WhatsApp</label>
+          <div class="input-row mono">
+            <span class="prefix">+</span>
+            <input id="pairNumber" type="tel" inputmode="numeric" placeholder="62 812 3456 7890" autocomplete="off" />
+          </div>
+          <p class="error-text" id="pairError"></p>
+        </div>
+        <div class="modal-actions">
+          <button class="btn ghost" id="pairCancelBtn">Batal</button>
+          <button class="btn" id="pairSubmitBtn"><span class="btn-label">Generate Pairing</span></button>
+        </div>
+      </div>
+
+      <!-- step: progress -->
+      <div id="pairStepProgress" class="hidden">
+        <h3>Menghubungkan…</h3>
+        <p>Jangan tutup jendela ini dulu.</p>
+
+        <div class="progress-log" id="progressLog">
+          <div class="p-item" data-step="contact"><span class="p-mark"></span> Menghubungi server</div>
+          <div class="p-item" data-step="session"><span class="p-mark"></span> Membuat session</div>
+          <div class="p-item" data-step="code"><span class="p-mark"></span> Generate pairing code</div>
+          <div class="p-item" data-step="wait"><span class="p-mark"></span> Menunggu pairing</div>
+          <div class="p-item" data-step="sync"><span class="p-mark"></span> Sinkronisasi</div>
+          <div class="p-item" data-step="done"><span class="p-mark"></span> Terhubung</div>
+        </div>
+      </div>
+
+      <!-- step: kode -->
+      <div id="pairStepCode" class="hidden">
+        <h3>Kode Pairing</h3>
+        <div class="code-row" id="codeRow"></div>
+        <button class="copy-code" id="copyCodeBtn">Salin kode</button>
+
+        <div class="countdown-wrap" id="countdownWrap">
+          <svg class="countdown-ring" viewBox="0 0 24 24">
+            <circle class="track" cx="12" cy="12" r="10"></circle>
+            <circle class="fill" id="countdownFill" cx="12" cy="12" r="10" stroke-dasharray="62.8" stroke-dashoffset="0"></circle>
+          </svg>
+          <span id="countdownText">Kode berlaku 60 detik</span>
+        </div>
+
+        <ol class="howto">
+          <li>Buka WhatsApp → Setelan → Perangkat Tertaut</li>
+          <li>Ketuk <b>Tautkan perangkat</b> → <b>Tautkan dengan nomor telepon</b></li>
+          <li>Masukkan kode di atas</li>
+        </ol>
+
+        <div class="modal-actions">
+          <button class="btn ghost" id="pairCancelBtn2">Batalkan</button>
+          <button class="btn ghost hidden" id="pairRegenBtn">Generate Ulang</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="../js/app.js"></script>
+  <script src="../js/dashboard.js"></script>
+</body>
+</html>

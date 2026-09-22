@@ -1,0 +1,96 @@
+/**
+ * Gemini — semua request pakai Gemini API resmi
+ * supaya instruction/karakter dihormati dengan benar
+ */
+
+import axios from "axios";
+import config from "../../config.js";
+
+const GEMINI_API_KEY = config?.geminiApiKey || config?.APIkey?.gemini || config?.geminiKey || "";
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+
+async function callGeminiAPI(message, instruction, imageBuffer = null, retries = 3) {
+  if (!GEMINI_API_KEY) throw new Error("Gemini API key tidak ditemukan di config.geminiApiKey");
+
+  const parts = [];
+
+  if (imageBuffer) {
+    parts.push({
+      inline_data: {
+        mime_type: "image/jpeg",
+        data: imageBuffer.toString("base64"),
+      },
+    });
+  }
+
+  parts.push({ text: message || "Analisis gambar ini." });
+
+  const body = {
+    contents: [{ role: "user", parts }],
+    generationConfig: {
+      temperature: 0.9,
+      maxOutputTokens: 2048,
+    },
+  };
+
+  if (instruction) {
+    body.systemInstruction = {
+      parts: [{ text: instruction }],
+    };
+  }
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const { data } = await axios.post(
+        `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
+        body,
+        {
+          headers: { "Content-Type": "application/json" },
+          timeout: 60000,
+        }
+      );
+
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error("Gemini API tidak mengembalikan teks");
+
+      return text.replace(/\*\*(.+?)\*\*/g, "*$1*");
+    } catch (err) {
+      const status = err?.response?.status;
+
+      // 429 rate limit — tunggu lalu retry
+      if (status === 429 && attempt < retries) {
+        const delay = attempt * 5000; // 5s, 10s, 15s
+        console.warn(`[Gemini] Rate limit 429, retry ${attempt}/${retries} dalam ${delay/1000}s...`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+
+      // 503 overload — tunggu lebih lama
+      if (status === 503 && attempt < retries) {
+        console.warn(`[Gemini] Server overload 503, retry ${attempt}/${retries}...`);
+        await new Promise((r) => setTimeout(r, 8000));
+        continue;
+      }
+
+      throw err;
+    }
+  }
+}
+
+async function gemini(input = {}) {
+  const payload =
+    typeof input === "string" ? { message: input } : input || {};
+  const { message, instruction = "", imageBuffer = null } = payload;
+
+  if (!message && !imageBuffer) throw new Error("Message is required.");
+
+  const text = await callGeminiAPI(message, instruction, imageBuffer);
+
+  return {
+    text,
+    sessionId: null,
+  };
+}
+
+export { gemini as chat };
+export default gemini;

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JadiBot</title>
+</head>
+<body>
+  <script>
+    (function () {
+      var token = localStorage.getItem("jadibot_token");
+      if (!token) {
+        location.replace("pages/login.html");
+        return;
+      }
+      try {
+        var user = JSON.parse(localStorage.getItem("jadibot_user") || "null");
+        location.replace(user && user.role === "admin" ? "pages/admin.html" : "pages/dashboard.html");
+      } catch (e) {
+        location.replace("pages/login.html");
+      }
+    })();
+  </script>
+</body>
+</html>

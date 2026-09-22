@@ -1,0 +1,20 @@
+{
+  "name": "miku-wa-gateway",
+  "version": "0.1.0",
+  "description": "Gateway REST + WebSocket untuk custom WhatsApp client APK (terpisah dari bot utama)",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test tests/"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {}
+}

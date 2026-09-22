@@ -1,0 +1,15 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/app/build
+/captures
+.externalNativeBuild
+.cxx
+
+# Keystore release & password — JANGAN commit. Kalau hilang, tidak bisa
+# update APK dengan signature yang sama (user harus uninstall dulu).
+mikuwa-release.keystore
+keystore.properties
