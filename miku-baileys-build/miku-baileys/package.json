@@ -1,0 +1,77 @@
+{
+  "name": "mikuhostt-baileys",
+  "type": "module",
+  "version": "1.0.2",
+  "description": "Miku-Baileys by MikuHost — modded Baileys distribution with interactive message, album, newsletter, and VoIP support.",
+  "license": "MIT",
+  "author": "MikuHost",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/**/*",
+    "WAProto/**/*"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "baileys",
+    "whatsapp",
+    "whatsapp-api",
+    "whatsapp-bot",
+    "miku-baileys",
+    "multi-device",
+    "bot",
+    "automation",
+    "interactive-messages",
+    "voip",
+    "voice-call"
+  ],
+  "dependencies": {
+    "@cacheable/node-cache": "^1.4.0",
+    "@hapi/boom": "^9.1.3",
+    "async-mutex": "^0.5.0",
+    "fflate": "^0.8.0",
+    "libsignal": "^6.0.0",
+    "lru-cache": "^11.1.0",
+    "music-metadata": "^11.7.0",
+    "p-queue": "^9.0.0",
+    "pino": "^9.6",
+    "protobufjs": "^7.2.4",
+    "whatsapp-rust-bridge": "0.5.2",
+    "ws": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.9.0",
+    "@types/ws": "^8.0.0",
+    "javascript-obfuscator": "^5.4.1",
+    "link-preview-js": "^3.0.0",
+    "protobufjs-cli": "^1.1.0",
+    "typescript": "^5.8.2"
+  },
+  "peerDependencies": {
+    "@roamhq/wrtc": "*",
+    "audio-decode": "^2.1.3",
+    "jimp": "^1.6.0",
+    "link-preview-js": "^3.0.0",
+    "sharp": "*"
+  },
+  "peerDependenciesMeta": {
+    "@roamhq/wrtc": {
+      "optional": true
+    },
+    "audio-decode": {
+      "optional": true
+    },
+    "jimp": {
+      "optional": true
+    },
+    "link-preview-js": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
