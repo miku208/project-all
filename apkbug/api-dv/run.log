@@ -1,0 +1,9 @@
+✅ activeKeys loaded from keyList.json.
+📥 VPS list loaded.
+🔄 Connecting to all VPS servers...
+🟣 Server running on http://localhost:2276
+🚀 Server aktif di http://localhost:2276
+⚠️ [miku-baileys] WARNING: Module "fluent-ffmpeg" is not installed. Video previews may not work.
+👉 Please run: npm install fluent-ffmpeg
+[✅ BAILEYS] mikuhostt-baileys loaded
+[DEBUG] Found 0 subfolders inside permenmd
