@@ -1,0 +1,27 @@
+[
+  {
+    "username": "mikuhost",
+    "password": "mikuhost2026",
+    "expiredDate": "99999-09-99",
+    "role": "owner",
+    "lastSend": 1789971030847
+  },
+  {
+    "username": "khaito",
+    "password": "khaito2026",
+    "role": "admin",
+    "expiredDate": "2027-04-09"
+  },
+  {
+    "username": "klea",
+    "password": "klea123",
+    "role": "vip",
+    "expiredDate": "2026-10-21"
+  },
+  {
+    "username": "rembo",
+    "password": "rembo2026",
+    "role": "admin",
+    "expiredDate": "2027-07-18"
+  }
+]
