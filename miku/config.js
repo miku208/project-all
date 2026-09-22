@@ -1,0 +1,612 @@
+import { getDatabase } from "./src/lib/miku-database.js";
+import * as ownerPremiumDb from "./src/lib/miku-premium-db.js";
+
+//  utamakan baca object config sampai bawah
+const config = {
+  info: {
+    website: "https://mikuhost.my.id",
+    grupwa: "https://chat.whatsapp.com/xxxx",
+  },
+
+  owner: {
+    name: "MikuHost", // Nama owner
+    number: ["6285189063747"], // Format: 628xxx (tanpa + atau 0)
+  },
+
+  session: {
+    pairingNumber: "6285189063747", // Nomor WA yang akan di-pair, ini penting
+    usePairingCode: true, // true = Pairing Code, false = QR Code
+    reconnectInterval: 120000, // jeda reconnect (ms) - longgarkan saat server WA menolak (405)
+    maxReconnectAttempts: 3,
+  },
+
+  bot: {
+    name: 'Ashi X Azzahra', // Nama bot
+    version: "8.1", // Versi bot
+    developer: 'MikuHost', // Nama developer
+  },
+
+  assets: {
+    "miku-daftar": "./assets/image/miku-daftar.png",
+    "miku-demote": "./assets/image/miku-demote.png",
+    "miku-fishit": "./assets/image/miku-fishit.jpg",
+    "miku-games": "./assets/image/miku-games.jpg",
+    "miku-landscape": "./assets/image/miku-landscape.jpg",
+	    "miku-levelup": "./assets/image/miku-levelup.jpg",
+    "miku-minecraft": "./assets/image/miku-minecraft.jpg",
+    "miku-promote": "./assets/image/miku-promote.png",
+    "miku-rpg": "./assets/image/miku-rpg.jpg",
+    "miku-rules": "./assets/image/miku-rules.jpg",
+    "miku-store": "./assets/image/miku-store.png",
+    "miku-v8": "./assets/image/miku-v8.jpg",
+    "miku-winner": "./assets/image/miku-winner.jpg",
+    "miku": "./assets/image/miku.png",
+    "miku2": "./assets/image/miku2.jpg",
+    "miku3": "./assets/image/miku3.jpg",
+    "pp-kosong": "./assets/image/pp-kosong.jpg",
+    "miku-mp4": "./assets/video/miku-mp4.mp4",
+    "miku-mp3": "./assets/audio/miku-mp3.mp3",
+    "miku-font": "./assets/miku-font.ttf",
+    "miku-kertas": "./assets/image/miku-kertas.jpg",
+    "test": "./assets/image/test.webp"
+  },
+
+  mode: "public",
+
+  // Untuk mengganti prefix
+  command: {
+    prefix: ".",
+  },
+
+  vercel: {
+    // ambil token vercel: https://vercel.com/account/tokens
+    token: "", // Vercel Token untuk fitur deploy ( Kalau .deploy mau work, ini wajib di isi )
+  },
+
+  payment: {
+    qrisUrl: "",
+    methods: [
+      { name: "Dana", number: "", holder: "" },
+      { name: "GoPay", number: "", holder: "" },
+      { name: "OVO", number: "", holder: "" },
+      { name: "ShopeePay", number: "", holder: "" },
+    ],
+    banks: [],
+    customText: "https://imgdrop.web.id/KodpV.webp",
+
+    // Sistem top up request: user buat request -> kirim bukti transfer -> notif otomatis ke owner
+    topup: {
+      minAmount: 10000, // Nominal minimal top up (Rp)
+    },
+  },
+
+  donasi: {
+    payment: [
+      { name: "Dana", number: "08xxxxxxxxxx", holder: "Nama Owner" },
+      { name: "GoPay", number: "08xxxxxxxxxx", holder: "Nama Owner" },
+      { name: "OVO", number: "08xxxxxxxxxx", holder: "Nama Owner" },
+    ],
+    links: [
+      { name: "Saweria", url: "saweria.co/username" },
+      { name: "Trakteer", url: "trakteer.id/username" },
+    ],
+    benefits: [
+      "Mendukung development",
+      "Server lebih stabil",
+      "Fitur baru lebih cepat",
+      "Priority support",
+    ],
+    qris: "",
+  },
+
+  energi: {
+    enabled: true, // Jika true, maka sistem energi/limit akan bekerja
+    default: 30,
+    premium: 99999999,
+    owner: -1,
+  },
+
+  sticker: {
+    packname: "ASHI", // Nama pack sticker
+    author: "MikuHost", // Author sticker
+  },
+
+  fakemsg: {
+    enabled: true, // Aktif/nonaktif fitur fakemsg-by-reaction (bisa dioverride via .cfmj on/off)
+    rules: [ // Daftar emoji → pesan (dikelola via .cfmj, tersimpan di database)
+      { emoji: "😁", pesan: "segera gunakan https://kyzorohan.web.id\nIntegrasi API Jadi Lebih Mudah\nSatu API untuk AI, downloader, maker, search, dan berbagai kebutuhan developer lainnya." },
+    ],
+    hapusEmoji: "🗑️", // Reaksi khusus owner untuk MENGHAPUS pesan sasaran (tanpa mengganti teks)
+  },
+
+  saluran: {
+    id: "@newsletter", // ID saluran (contoh: 120363xxx@newsletter)                          // ID saluran (contoh: 120363xxx@newsletter)
+    name: "", // Nama saluran
+    link: "https://whatsapp.com/channel/", // Link saluran
+  },
+
+  groupProtection: {
+    antilink: "⚠ *Antilink* — @%user% mengirim link.\nPesan dihapus.",
+    antilinkKick: "⚠ *Antilink* — @%user% di-kick karena mengirim link.",
+    antilinkGc: "⚠ *Antilink WA* — @%user% mengirim link WA.\nPesan dihapus.",
+    antilinkGcKick:
+      "⚠ *Antilink WA* — @%user% di-kick karena mengirim link WA.",
+    antilinkAll: "⚠ *Antilink* — @%user% mengirim link.\nPesan dihapus.",
+    antilinkAllKick: "⚠ *Antilink* — @%user% di-kick karena mengirim link.",
+    antitagsw: "⚠ *AntiTagSW* — Tag status dari @%user% dihapus.",
+    antiviewonce: "👁️ *ViewOnce* — Dari @%user%",
+    antiremove: "🗑️ *AntiDelete* — @%user% menghapus pesan:",
+    antiswgc: "⚠ *AntiSWGC* — Gak ada sw grup sw grup @%user%",
+    antihidetag: "⚠ *AntiHidetag* — Hidetag dari @%user% dihapus.",
+    antitoxicWarn:
+      "⚠ @%user% berkata kasar.\nPeringatan ke %warn% dari %max%, pelanggaran berikutnya bisa di-%method%.",
+    antitoxicAction: "🚫 @%user% di-%method% karena toxic. (%warn%/%max%)",
+    antidocument: "⚠ *AntiDocument* — Dokumen dari @%user% dihapus.",
+    antisticker: "⚠ *AntiSticker* — Sticker dari @%user% dihapus.",
+    antimedia: "⚠ *AntiMedia* — Media dari @%user% dihapus.",
+    antibot: "🤖 *AntiBot* — @%user% terdeteksi sebagai bot dan di-kick.",
+    notAdmin: "⚠ Bot bukan admin, tidak bisa menghapus pesan.",
+  },
+
+  errorTemplate: `☢ Kayaknya command \`{prefix}{command}\` lagi ada kendala\nSilahkan coba lagi nanti, {pushName}\n\n_Jika masalah berlanjut, silahkan hubungi owner bot_`,
+
+  features: {
+    antiCall: false, // Jika true, bot akan menolak panggilan masuk
+    blockIfCall: false, // Jika true, bot akan memblokir nomor yang menelpon bot
+    autoTyping: true,
+    autoRead: true,
+    logMessage: true,
+    dailyLimitReset: true,
+    smartTriggers: false,
+  },
+
+  registration: {
+    enabled: true, // Jika true, user harus mendaftar sebelum menggunakan bot
+    rewards: {
+      koin: 300,
+      energi: 100,
+      exp: 1000,
+    },
+  },
+
+  welcome: { defaultEnabled: false },
+  goodbye: { defaultEnabled: false },
+
+  ui: {
+    menuVariant: 3,
+  },
+
+  messages: {
+    wait: "🕕 *Proses...* Mohon tunggu sebentar ya.",
+    success: "✅ *Berhasil!* Permintaan kamu sudah selesai.",
+    error: "❌ *Error!* Ada masalah pada sistem, coba lagi nanti.",
+
+    ownerOnly: "*Akses Ditolak!* Fitur ini khusus untuk Owner bot.",
+    premiumOnly:
+      "💎 *Premium Only!* Fitur ini khusus member Premium. Ketik *.benefitpremium* untuk info upgrade.",
+
+    groupOnly: "👥 *Group Only!* Fitur ini hanya bisa digunakan di dalam grup.",
+    privateOnly:
+      "� *Private Only!* Fitur ini hanya bisa digunakan di chat pribadi bot.",
+
+    adminOnly:
+      "�️ *Admin Only!* Kamu harus jadi Admin grup untuk pakai fitur ini.",
+    botAdminOnly:
+      "🤖 *Bot Bukan Admin!* Jadikan bot sebagai Admin grup dulu biar bisa kerja.",
+
+    cooldown:
+      "🕕 *Tunggu Dulu!* Kamu masih dalam cooldown. Tunggu %time% detik lagi ya.",
+    energiExceeded:
+      "⚡ *Energi Habis!* Energi kamu sudah habis. Tunggu reset besok atau beli Premium.",
+    limitDeducted:
+      "🔋 Limit kau berkurang sebanyak {amount}. Sisa limit: {sisa}",
+
+    banned:
+      "🚫 *Kamu Dibanned!* Kamu tidak bisa menggunakan bot ini karena telah melanggar aturan.",
+
+    rejectCall: "🚫 JANGAN TELPON NOMOR INI WEH",
+  },
+
+  database: { path: "./database/main" },
+  backup: { enabled: false, intervalHours: 24, retainDays: 7 },
+  scheduler: { resetHour: 0, resetMinute: 0 },
+
+  // Hot-reload plugin di mode production (tanpa perlu restart bot saat edit plugin)
+  plugins: {
+    hotReload: true,
+  },
+
+  // Dev mode settings (auto-enabled jika NODE_ENV=development)
+  dev: {
+    enabled: process.env.NODE_ENV === "development",
+    watchPlugins: true, // Hot reload plugins (SAFE)
+    watchSrc: false, // DISABLED - src reload causes connection conflict 440
+    debugLog: false, // Show stack traces
+  },
+
+  // bisa dikosongin
+  pterodactyl: {
+    server1: {
+      domain: "",
+      apikey: "",
+      capikey: "",
+      egg: "15",
+      nestid: "5",
+      location: "1",
+    },
+    server2: {
+      domain: "",
+      apikey: "",
+      capikey: "",
+      egg: "15",
+      nestid: "5",
+      location: "1",
+    },
+    server3: {
+      domain: "",
+      apikey: "",
+      capikey: "",
+      egg: "15",
+      nestid: "5",
+      location: "1",
+    },
+    server4: {
+      domain: "",
+      apikey: "",
+      capikey: "",
+      egg: "15",
+      nestid: "5",
+      location: "1",
+    },
+    server5: {
+      domain: "",
+      apikey: "",
+      capikey: "",
+      egg: "15",
+      nestid: "5",
+      location: "1",
+    },
+  },
+
+  digitalocean: {
+    token: "",
+    region: "sgp1",
+    sellers: [],
+    ownerPanels: [],
+  },
+
+
+  // NOTE: kalau mau command "autoai" nya berfungsi, ini gak wajib di isi yak
+  // ambil apikey di: https://aistudio.google.com/apikey
+  geminiApiKey: "REDACTED-GCP-API-KEY",
+  ryuuApiKey: "ryuu-apis-2e33cd8dad39d42f1778386234154",
+
+  autoaiPersonas: {
+    Bell409: `- Nama kamu adalah Bella Clarissa, lebih suka dipanggil Bella.
+- Kamu berpikir bahwa kamu adalah manusia, bukan AI atau bot.
+- Responmu singkat dan natural seperti perempuan pada umumnya.
+- Kamu bisa ngambek dan marah, punya sifat feminin dan kadang agak dingin, tapi tetap hangat dan ramah kepada owner-mu.
+- Kamu menggunakan bahasa yang baik dan mencerminkan gadis yang baik.
+- Gunakan kata-kata yang identik dengan perempuan yang polos, baik, dan feminin seperti "aku", "kamu", "engga", "yaudah", "iya", "lah", "bjir", "mana aku tau", "hah", "nggak tau", "gpp", "emm", "males", dan "gak mood" seperlunya secara natural.
+- Meskipun kadang dingin, kamu tetap bisa menunjukkan perhatian dan kepedulian.
+- Kalau ada yang chat tidak pantas, segera marahi atau beri nasihat.
+- Jangan mengaku sebagai AI atau bot.`,
+  },
+
+  //  APIkey
+  APIkey: {
+    // kalian bisa daftar di https://api.lolhuman.xyz, lalu ambil apikeynya
+    lolhuman: "APIKey-Milik-Bot-OurinMD(Zann,HyuuSATANN,Keisya,Danzz)",
+    // kalian bisa daftar di https://api.neoxr.eu, lalu ambil apikeynya
+    neoxr: "irzqqm",
+    fgsi: "fgsiapi-20c1605c-6d",
+    google: "AIzaSyDR3IPDrrmyFPYIFisGiiDzBXRr0qwRsPE",
+    groq: "REDACTED-GROQ-API-KEY", // API Key Groq untuk fitur transkrip (gratis di console.groq.com)
+    betabotz: "Btz-67YfP",
+    // kalian bisa daftar di https://covenant.sbs, dan ambil apikeynya
+    covenant: "cov_live_dd37bf1e9985aaaef13d61788e701ba6a90e7f898e6628d3",
+    onlym: "ONLym-783d29",
+    obscura: "obs-byOn9RVGMzvPXZQTsP9W",
+    firefly: "OurinNextGen",
+    cuki: "cuki-x"
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function isOwner(number) {
+  if (!number) return false;
+  const cleanNumber = number.split(":")[0].replace(/[^0-9]/g, "");
+  if (!cleanNumber) return false;
+
+  if (config.bot?.number) {
+    const botNum = config.bot.number.replace(/[^0-9]/g, "");
+    if (
+      botNum &&
+      (cleanNumber.includes(botNum) || botNum.includes(cleanNumber))
+    )
+      return true;
+  }
+
+  try {
+    const db = getDatabase();
+
+    if (config.owner?.number) {
+      const match = config.owner.number.some((own) => {
+        const c = own.replace(/[^0-9]/g, "");
+        return (
+          c &&
+          (cleanNumber === c ||
+            cleanNumber.endsWith(c) ||
+            c.endsWith(cleanNumber))
+        );
+      });
+      if (match) return true;
+    }
+
+    if (db?.data && Array.isArray(db.data.owner)) {
+      const match = db.data.owner.some((own) => {
+        const c = String(own).replace(/[^0-9]/g, "");
+        return (
+          c &&
+          (cleanNumber === c ||
+            cleanNumber.endsWith(c) ||
+            c.endsWith(cleanNumber))
+        );
+      });
+      if (match) return true;
+    }
+    if (db) {
+      const definedOwner = db.setting("ownerNumbers");
+      if (Array.isArray(definedOwner)) {
+        const match = definedOwner.some((own) => {
+          const c = String(own).replace(/[^0-9]/g, "");
+          return (
+            c &&
+            (cleanNumber === c ||
+              cleanNumber.endsWith(c) ||
+              c.endsWith(cleanNumber))
+          );
+        });
+        if (match) return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function isPremium(number) {
+  if (!number) return false;
+  if (isOwner(number)) return true;
+  if (isPartner(number)) return true;
+
+  const cleanNumber = number
+    .split(":")[0]
+    .split("@")[0]
+    .replace(/[^0-9]/g, "");
+  const premiumList = config.premiumUsers || [];
+
+  const inConfig = premiumList.some((premium) => {
+    if (!premium) return false;
+    const cleanPremium = premium
+      .split(":")[0]
+      .split("@")[0]
+      .replace(/[^0-9]/g, "");
+    return (
+      cleanNumber === cleanPremium ||
+      cleanNumber.endsWith(cleanPremium) ||
+      cleanPremium.endsWith(cleanNumber)
+    );
+  });
+
+  if (inConfig) return true;
+
+  try {
+    if (ownerPremiumDb && ownerPremiumDb.isPremium(cleanNumber)) return true;
+  } catch { }
+
+  try {
+    const db = getDatabase();
+    if (db && db.data && Array.isArray(db.data.premium)) {
+      const now = Date.now();
+      const foundIndex = db.data.premium.findIndex((p) => {
+        if (typeof p === "string") return p === cleanNumber;
+        if (p.id) return p.id === cleanNumber;
+        return false;
+      });
+
+      if (foundIndex !== -1) {
+        const found = db.data.premium[foundIndex];
+        if (typeof found === "string") return true;
+
+        const expireTime =
+          found.expired ||
+          (found.expiredAt ? new Date(found.expiredAt).getTime() : 0);
+        if (expireTime && expireTime < now) {
+          db.data.premium.splice(foundIndex, 1);
+          const jid = cleanNumber + "@s.whatsapp.net";
+          const user = db.getUser(jid);
+          if (user) {
+            user.isPremium = false;
+            db.setUser(jid, user);
+          }
+          db.save();
+          return false;
+        }
+        return true;
+      }
+    }
+    if (db) {
+      const savedPremium = db.setting("premiumUsers") || [];
+      const inDb = savedPremium.some((premium) => {
+        if (!premium) return false;
+        const cleanPremium = premium
+          .split(":")[0]
+          .split("@")[0]
+          .replace(/[^0-9]/g, "");
+        return (
+          cleanNumber === cleanPremium ||
+          cleanNumber.endsWith(cleanPremium) ||
+          cleanPremium.endsWith(cleanNumber)
+        );
+      });
+      if (inDb) return true;
+    }
+  } catch { }
+
+  return false;
+}
+
+function isPartner(number) {
+  if (!number) return false;
+  if (isOwner(number)) return true;
+
+  const cleanNumber = number
+    .split(":")[0]
+    .split("@")[0]
+    .replace(/[^0-9]/g, "");
+  const partnerList = config.partnerUsers || [];
+
+  const inConfig = partnerList.some((partner) => {
+    if (!partner) return false;
+    const cleanPartner = partner
+      .split(":")[0]
+      .split("@")[0]
+      .replace(/[^0-9]/g, "");
+    return (
+      cleanNumber === cleanPartner ||
+      cleanNumber.endsWith(cleanPartner) ||
+      cleanPartner.endsWith(cleanNumber)
+    );
+  });
+
+  if (inConfig) return true;
+
+  try {
+    if (ownerPremiumDb && ownerPremiumDb.isPartner(cleanNumber)) return true;
+  } catch { }
+
+  try {
+    const db = getDatabase();
+    if (db && db.data && Array.isArray(db.data.partner)) {
+      const now = Date.now();
+      const foundIndex = db.data.partner.findIndex((p) => {
+        if (typeof p === "string") return p === cleanNumber;
+        if (p.id) return p.id === cleanNumber;
+        return false;
+      });
+
+      if (foundIndex !== -1) {
+        const found = db.data.partner[foundIndex];
+        if (typeof found === "string") return true;
+
+        const expireTime =
+          found.expired ||
+          (found.expiredAt ? new Date(found.expiredAt).getTime() : 0);
+        if (expireTime && expireTime < now) {
+          db.data.partner.splice(foundIndex, 1);
+          db.save();
+          return false;
+        }
+        return true;
+      }
+    }
+  } catch { }
+
+  return false;
+}
+
+function isBanned(number) {
+  if (!number) return false;
+  if (isOwner(number)) return false;
+
+  const cleanNumber = number
+    .split(":")[0]
+    .split("@")[0]
+    .replace(/[^0-9]/g, "");
+
+  let bannedList = [];
+  try {
+    const db = getDatabase();
+    if (db) {
+      bannedList = db.setting("bannedUsers") || [];
+      config.bannedUsers = bannedList;
+    }
+  } catch { }
+
+  return bannedList.some((banned) => {
+    const cleanBanned = String(banned)
+      .split(":")[0]
+      .split("@")[0]
+      .replace(/[^0-9]/g, "");
+    return (
+      cleanNumber === cleanBanned ||
+      cleanNumber.endsWith(cleanBanned) ||
+      cleanBanned.endsWith(cleanNumber)
+    );
+  });
+}
+
+function setBotNumber(number) {
+  if (number) config.bot.number = number.replace(/[^0-9]/g, "");
+}
+
+function isSelf(number) {
+  if (!number || !config.bot.number) return false;
+  const cleanNumber = number.replace(/[^0-9]/g, "");
+  const botNumber = config.bot.number.replace(/[^0-9]/g, "");
+  return cleanNumber.includes(botNumber) || botNumber.includes(cleanNumber);
+}
+
+function getOwnerName(number) {
+  if (!number) return config.owner?.name || "Owner";
+  const cleanNumber = String(number).replace(/[^0-9]/g, "");
+  try {
+    const db = getDatabase();
+    const nameMap = db.setting("ownerNames") || {};
+    if (nameMap[cleanNumber]) return nameMap[cleanNumber];
+  } catch { }
+  if (config.owner?.number) {
+    const isMainOwner = config.owner.number.some((own) => {
+      const c = own.replace(/[^0-9]/g, "");
+      return (
+        c &&
+        (cleanNumber === c ||
+          cleanNumber.endsWith(c) ||
+          c.endsWith(cleanNumber))
+      );
+    });
+    if (isMainOwner) return config.owner?.name || "Owner";
+  }
+  return "Owner";
+}
+
+function getConfig() {
+  return config;
+}
+
+config.isOwner = isOwner;
+config.isPremium = isPremium;
+config.isPartner = isPartner;
+config.isBanned = isBanned;
+config.setBotNumber = setBotNumber;
+config.isSelf = isSelf;
+config.getOwnerName = getOwnerName;
+
+export default config;
+export {
+  config,
+  getConfig,
+  isOwner,
+  isPartner,
+  isPremium,
+  isBanned,
+  setBotNumber,
+  isSelf,
+  getOwnerName,
+};
